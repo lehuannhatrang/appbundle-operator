@@ -143,7 +143,7 @@ var _ = Describe("AppBundle Controller", func() {
 				}
 
 				// Reconcile to process the finalizer
-				_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+				_, _ = controllerReconciler.Reconcile(ctx, reconcile.Request{
 					NamespacedName: typeNamespacedName,
 				})
 				// Don't fail on error since resource might already be deleted

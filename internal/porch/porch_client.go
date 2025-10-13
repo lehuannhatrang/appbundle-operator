@@ -54,7 +54,7 @@ func (c *Client) GetPackageRevision(ctx context.Context, name, namespace string)
 	// 3. Handle errors appropriately
 
 	// For now, return a placeholder
-	return nil, fmt.Errorf("Porch integration not yet implemented")
+	return nil, fmt.Errorf("porch integration not yet implemented")
 }
 
 // ListPackageRevisions lists package revisions from a repository
@@ -65,7 +65,7 @@ func (c *Client) ListPackageRevisions(ctx context.Context, repository, namespace
 	// 2. Filter by status if needed
 	// 3. Return the list
 
-	return nil, fmt.Errorf("Porch integration not yet implemented")
+	return nil, fmt.Errorf("porch integration not yet implemented")
 }
 
 // GetPackageContents retrieves the contents of a package
@@ -76,7 +76,7 @@ func (c *Client) GetPackageContents(ctx context.Context, name, namespace string)
 	// 2. Extract the package contents (ConfigMap or direct resources)
 	// 3. Return as a map of filename -> content
 
-	return nil, fmt.Errorf("Porch integration not yet implemented")
+	return nil, fmt.Errorf("porch integration not yet implemented")
 }
 
 // WatchPackageRevisions sets up a watch for package revision changes
@@ -87,7 +87,7 @@ func (c *Client) WatchPackageRevisions(ctx context.Context, repository, namespac
 	// 2. Trigger reconciliation when packages change
 	// 3. Handle watch errors and reconnection
 
-	return fmt.Errorf("Porch watch not yet implemented")
+	return fmt.Errorf("porch watch not yet implemented")
 }
 
 // Integration Notes:

@@ -83,7 +83,7 @@ func (r *AppBundleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	// Check if the AppBundle is being deleted
-	if !appBundle.ObjectMeta.DeletionTimestamp.IsZero() {
+	if !appBundle.DeletionTimestamp.IsZero() {
 		if controllerutil.ContainsFinalizer(appBundle, appBundleFinalizer) {
 			// Run finalization logic
 			if err := r.finalizeAppBundle(ctx, appBundle); err != nil {
@@ -290,6 +290,7 @@ func (r *AppBundleReconciler) reconcileComponent(ctx context.Context, appBundle 
 }
 
 // reconcilePorchPackages handles integration with Porch for package lifecycle management
+// nolint:unparam // This function currently always returns nil as it's a placeholder
 func (r *AppBundleReconciler) reconcilePorchPackages(ctx context.Context, appBundle *appv1alpha1.AppBundle) error {
 	logger := log.FromContext(ctx)
 
@@ -312,6 +313,7 @@ func (r *AppBundleReconciler) reconcilePorchPackages(ctx context.Context, appBun
 }
 
 // finalizeAppBundle handles cleanup when AppBundle is deleted
+// nolint:unparam // This function currently always returns nil as cleanup is handled by K8s GC
 func (r *AppBundleReconciler) finalizeAppBundle(ctx context.Context, appBundle *appv1alpha1.AppBundle) error {
 	logger := log.FromContext(ctx)
 	logger.Info("Finalizing AppBundle", "name", appBundle.Name)
