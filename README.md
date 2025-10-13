@@ -285,12 +285,14 @@ See `internal/porch/porch_client.go` for detailed integration notes.
 The project includes automated GitHub Actions workflows:
 
 - **Continuous Integration**: Tests run on every push and pull request
-- **Docker Build & Push**: Automatic image builds on commits to main branch
-- **Multi-platform**: Supports both AMD64 and ARM64 architectures
+- **Docker Build & Push**: Optimized automatic image builds
+  - **Development**: AMD64-only builds (~2-3 min) on commits to main
+  - **Releases**: Multi-platform builds (AMD64 + ARM64) on version tags
+- **Aggressive Caching**: Build cache optimization for faster iterations
 
 Images are automatically pushed to: `docker.io/lehuannhatrang/appbundle-operator`
 
-See [CI/CD Setup Guide](docs/CICD.md) for configuration details.
+See [CI/CD Setup Guide](docs/CICD.md) and [Build Optimization](docs/BUILD_OPTIMIZATION.md) for details.
 
 ## Development
 
