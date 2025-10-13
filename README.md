@@ -280,6 +280,18 @@ The Porch integration framework is in place with placeholder methods. To complet
 
 See `internal/porch/porch_client.go` for detailed integration notes.
 
+## CI/CD
+
+The project includes automated GitHub Actions workflows:
+
+- **Continuous Integration**: Tests run on every push and pull request
+- **Docker Build & Push**: Automatic image builds on commits to main branch
+- **Multi-platform**: Supports both AMD64 and ARM64 architectures
+
+Images are automatically pushed to: `docker.io/lehuannhatrang/appbundle-operator`
+
+See [CI/CD Setup Guide](docs/CICD.md) for configuration details.
+
 ## Development
 
 ### Prerequisites
