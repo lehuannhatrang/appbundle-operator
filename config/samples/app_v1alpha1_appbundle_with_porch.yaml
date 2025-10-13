@@ -1,0 +1,63 @@
+apiVersion: app.example.com/v1alpha1
+kind: AppBundle
+metadata:
+  name: appbundle-with-porch
+  namespace: default
+spec:
+  # Enable Porch integration for package lifecycle management
+  porchIntegration:
+    enabled: true
+    repository: https://github.com/example/packages
+  
+  groups:
+    - name: networking
+      order: 0
+      components:
+        - name: service-mesh
+          order: 0
+          # Reference a Porch package for this component
+          porchPackageRef:
+            name: istio-base
+            namespace: porch-packages
+            revision: v1.0.0
+          template:
+            # Template can be minimal when using Porch packages
+            # The actual resources will be fetched from Porch
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: service-mesh-config
+              namespace: default
+            data:
+              mesh: istio
+    
+    - name: monitoring
+      order: 1
+      components:
+        - name: prometheus
+          order: 0
+          porchPackageRef:
+            name: prometheus-operator
+            namespace: porch-packages
+            revision: v2.0.0
+          template:
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: monitoring
+        
+        - name: grafana
+          order: 1
+          porchPackageRef:
+            name: grafana
+            namespace: porch-packages
+            revision: v1.5.0
+          template:
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: grafana-config
+              namespace: monitoring
+            data:
+              enabled: "true"
+

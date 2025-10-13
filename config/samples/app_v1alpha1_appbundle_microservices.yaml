@@ -1,0 +1,160 @@
+apiVersion: app.example.com/v1alpha1
+kind: AppBundle
+metadata:
+  name: microservices-app
+  namespace: default
+spec:
+  groups:
+    # Group 0: Shared infrastructure
+    - name: shared-infrastructure
+      order: 0
+      components:
+        - name: namespace
+          order: 0
+          template:
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: microservices
+        
+        - name: istio-injection
+          order: 1
+          template:
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: microservices
+              labels:
+                istio-injection: enabled
+    
+    # Group 1: Message queue
+    - name: messaging
+      order: 1
+      components:
+        - name: rabbitmq
+          order: 0
+          template:
+            apiVersion: apps/v1
+            kind: StatefulSet
+            metadata:
+              name: rabbitmq
+              namespace: microservices
+            spec:
+              serviceName: rabbitmq
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: rabbitmq
+              template:
+                metadata:
+                  labels:
+                    app: rabbitmq
+                spec:
+                  containers:
+                    - name: rabbitmq
+                      image: rabbitmq:3-management
+                      ports:
+                        - containerPort: 5672
+                        - containerPort: 15672
+    
+    # Group 2: Backend services
+    - name: backend-services
+      order: 2
+      components:
+        - name: user-service
+          order: 0
+          template:
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: user-service
+              namespace: microservices
+            spec:
+              replicas: 2
+              selector:
+                matchLabels:
+                  app: user-service
+              template:
+                metadata:
+                  labels:
+                    app: user-service
+                    version: v1
+                spec:
+                  containers:
+                    - name: user-service
+                      image: example/user-service:v1
+                      ports:
+                        - containerPort: 8080
+        
+        - name: order-service
+          order: 1
+          template:
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: order-service
+              namespace: microservices
+            spec:
+              replicas: 2
+              selector:
+                matchLabels:
+                  app: order-service
+              template:
+                metadata:
+                  labels:
+                    app: order-service
+                    version: v1
+                spec:
+                  containers:
+                    - name: order-service
+                      image: example/order-service:v1
+                      ports:
+                        - containerPort: 8080
+    
+    # Group 3: Frontend and API Gateway
+    - name: frontend
+      order: 3
+      components:
+        - name: api-gateway
+          order: 0
+          template:
+            apiVersion: networking.istio.io/v1beta1
+            kind: Gateway
+            metadata:
+              name: api-gateway
+              namespace: microservices
+            spec:
+              selector:
+                istio: ingressgateway
+              servers:
+                - port:
+                    number: 80
+                    name: http
+                    protocol: HTTP
+                  hosts:
+                    - "*"
+        
+        - name: frontend-app
+          order: 1
+          template:
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: frontend
+              namespace: microservices
+            spec:
+              replicas: 3
+              selector:
+                matchLabels:
+                  app: frontend
+              template:
+                metadata:
+                  labels:
+                    app: frontend
+                spec:
+                  containers:
+                    - name: frontend
+                      image: example/frontend:v1
+                      ports:
+                        - containerPort: 3000
+

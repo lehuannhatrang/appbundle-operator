@@ -1,0 +1,143 @@
+apiVersion: app.example.com/v1alpha1
+kind: AppBundle
+metadata:
+  name: appbundle-sample
+  namespace: default
+spec:
+  groups:
+    # Group 0: Infrastructure components (deployed first)
+    - name: infrastructure
+      order: 0
+      components:
+        - name: namespace
+          order: 0
+          template:
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: sample-app
+              labels:
+                app: sample
+        - name: configmap
+          order: 1
+          template:
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: app-config
+              namespace: sample-app
+            data:
+              app.properties: |
+                server.port=8080
+                app.name=sample-app
+    
+    # Group 1: Database components (deployed second)
+    - name: database
+      order: 1
+      components:
+        - name: db-secret
+          order: 0
+          template:
+            apiVersion: v1
+            kind: Secret
+            metadata:
+              name: db-credentials
+              namespace: sample-app
+            type: Opaque
+            stringData:
+              username: admin
+              password: changeme
+        - name: db-service
+          order: 1
+          template:
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: database
+              namespace: sample-app
+            spec:
+              selector:
+                app: database
+              ports:
+                - port: 5432
+                  targetPort: 5432
+        - name: db-deployment
+          order: 2
+          template:
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: database
+              namespace: sample-app
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: database
+              template:
+                metadata:
+                  labels:
+                    app: database
+                spec:
+                  containers:
+                    - name: postgres
+                      image: postgres:14
+                      ports:
+                        - containerPort: 5432
+                      env:
+                        - name: POSTGRES_USER
+                          valueFrom:
+                            secretKeyRef:
+                              name: db-credentials
+                              key: username
+                        - name: POSTGRES_PASSWORD
+                          valueFrom:
+                            secretKeyRef:
+                              name: db-credentials
+                              key: password
+    
+    # Group 2: Application components (deployed last)
+    - name: application
+      order: 2
+      components:
+        - name: app-service
+          order: 0
+          template:
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: web-app
+              namespace: sample-app
+            spec:
+              selector:
+                app: web-app
+              ports:
+                - port: 80
+                  targetPort: 8080
+              type: LoadBalancer
+        - name: app-deployment
+          order: 1
+          template:
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: web-app
+              namespace: sample-app
+            spec:
+              replicas: 3
+              selector:
+                matchLabels:
+                  app: web-app
+              template:
+                metadata:
+                  labels:
+                    app: web-app
+                spec:
+                  containers:
+                    - name: app
+                      image: nginx:latest
+                      ports:
+                        - containerPort: 8080
+                      envFrom:
+                        - configMapRef:
+                            name: app-config
