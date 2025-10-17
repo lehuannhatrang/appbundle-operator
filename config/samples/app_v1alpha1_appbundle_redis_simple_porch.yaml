@@ -1,7 +1,7 @@
 apiVersion: app.example.com/v1alpha1
 kind: AppBundle
 metadata:
-  name: 0
+  name: redis-simple
   namespace: default
 spec:
   # Porch integration - controller will create PackageVariant
