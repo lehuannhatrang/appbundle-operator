@@ -598,14 +598,16 @@ func (r *AppBundleReconciler) reconcileComponentWithPorch(ctx context.Context, a
 		},
 		"adoptionPolicy": "adoptExisting",
 		"deletionPolicy": "delete",
-		"injectors": []interface{}{
+	}
+	
+	// Add injectors if target namespace is specified
+	if targetNamespace != "" {
+		spec["injectors"] = []interface{}{
 			map[string]interface{}{
-				"name": "namespace",
-				"namespace": map[string]interface{}{
-					"name": targetNamespace,
-				},
+				"name":  "namespace",
+				"value": targetNamespace,
 			},
-		},
+		}
 	}
 
 	if err := unstructured.SetNestedMap(packageVariant.Object, spec, "spec"); err != nil {
