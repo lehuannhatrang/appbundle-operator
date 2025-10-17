@@ -79,6 +79,11 @@ spec:
                   labels:
                     app: database
                 spec:
+                  # Init container to simulate startup delay and demonstrate ordered deployment
+                  initContainers:
+                    - name: wait-for-dependencies
+                      image: busybox:1.36
+                      command: ['sh', '-c', 'echo "Waiting 10s before starting database..."; sleep 10; echo "Starting database now"']
                   containers:
                     - name: postgres
                       image: postgres:14
@@ -133,6 +138,11 @@ spec:
                   labels:
                     app: web-app
                 spec:
+                  # Init container to simulate startup delay and demonstrate ordered deployment
+                  initContainers:
+                    - name: wait-for-dependencies
+                      image: busybox:1.36
+                      command: ['sh', '-c', 'echo "Waiting 10s before starting web app..."; sleep 10; echo "Starting web app now"']
                   containers:
                     - name: app
                       image: nginx:latest
