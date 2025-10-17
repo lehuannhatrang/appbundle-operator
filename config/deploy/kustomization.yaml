@@ -1,0 +1,26 @@
+# Deployment configuration for appbundle-system namespace
+namespace: appbundle-system
+
+# Name prefix for all resources
+namePrefix: appbundle-
+
+# Labels to add to all resources
+labels:
+- includeSelectors: true
+  pairs:
+    app.kubernetes.io/name: appbundle-operator
+    app.kubernetes.io/component: operator
+    app.kubernetes.io/part-of: appbundle-system
+
+resources:
+- ../crd
+- ../rbac
+- ../manager
+- metrics_service.yaml
+
+patches:
+# Enable metrics endpoint using HTTPS
+- path: manager_metrics_patch.yaml
+  target:
+    kind: Deployment
+

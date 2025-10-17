@@ -237,11 +237,25 @@ func (r *AppBundleReconciler) reconcileComponent(ctx context.Context, appBundle 
 		obj.SetNamespace(appBundle.Namespace)
 	}
 
-	// Set owner reference
-	if err := controllerutil.SetControllerReference(appBundle, obj, r.Scheme); err != nil {
-		componentStatus.Phase = appv1alpha1.PhaseFailed
-		componentStatus.Message = fmt.Sprintf("Failed to set owner reference: %v", err)
-		return componentStatus, err
+	// Set owner reference only if the resource is in the same namespace as the AppBundle
+	// Kubernetes doesn't allow cross-namespace owner references for security reasons
+	// Also skip for cluster-scoped resources (they have no namespace)
+	if obj.GetNamespace() != "" && obj.GetNamespace() == appBundle.Namespace {
+		if err := controllerutil.SetControllerReference(appBundle, obj, r.Scheme); err != nil {
+			logger.Info("Warning: Failed to set owner reference, continuing without it",
+				"error", err,
+				"resource", obj.GetKind(),
+				"name", obj.GetName(),
+				"namespace", obj.GetNamespace())
+			// Don't return error - continue without owner reference
+			// The resource will still be created but won't be garbage collected automatically
+		}
+	} else {
+		logger.Info("Skipping owner reference for cross-namespace or cluster-scoped resource",
+			"resource", obj.GetKind(),
+			"name", obj.GetName(),
+			"namespace", obj.GetNamespace(),
+			"appBundleNamespace", appBundle.Namespace)
 	}
 
 	// Create or update the resource
@@ -320,8 +334,48 @@ func (r *AppBundleReconciler) finalizeAppBundle(ctx context.Context, appBundle *
 
 	// Cleanup logic here
 	// Resources with owner references will be automatically deleted by K8s
-	// Additional cleanup for external resources or Porch integration can be added here
+	// We need to manually clean up resources without owner references:
+	// - Cross-namespace resources
+	// - Cluster-scoped resources (Namespaces, ClusterRoles, etc.)
 
+	// Delete resources in reverse order (reverse of groups and components)
+	sortedGroups := make([]appv1alpha1.Group, len(appBundle.Spec.Groups))
+	copy(sortedGroups, appBundle.Spec.Groups)
+	sort.Slice(sortedGroups, func(i, j int) bool {
+		return sortedGroups[i].Order > sortedGroups[j].Order // Reverse order
+	})
+
+	for _, group := range sortedGroups {
+		// Sort components in reverse order
+		sortedComponents := make([]appv1alpha1.Component, len(group.Components))
+		copy(sortedComponents, group.Components)
+		sort.Slice(sortedComponents, func(i, j int) bool {
+			return sortedComponents[i].Order > sortedComponents[j].Order // Reverse order
+		})
+
+		for _, component := range sortedComponents {
+			// Parse the template to get resource info
+			obj := &unstructured.Unstructured{}
+			if err := json.Unmarshal(component.Template.Raw, obj); err != nil {
+				logger.Error(err, "Failed to parse template during cleanup", "component", component.Name)
+				continue
+			}
+
+			// Set namespace if not specified in template
+			if obj.GetNamespace() == "" && appBundle.Namespace != "" {
+				obj.SetNamespace(appBundle.Namespace)
+			}
+
+			// Try to delete the resource (ignore NotFound errors)
+			logger.Info("Deleting resource", "kind", obj.GetKind(), "name", obj.GetName(), "namespace", obj.GetNamespace())
+			if err := r.Delete(ctx, obj); err != nil && !errors.IsNotFound(err) {
+				logger.Error(err, "Failed to delete resource", "kind", obj.GetKind(), "name", obj.GetName())
+				// Continue with other resources even if one fails
+			}
+		}
+	}
+
+	logger.Info("AppBundle finalization complete", "name", appBundle.Name)
 	return nil
 }
 
