@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -29,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -291,6 +293,15 @@ func (r *AppBundleReconciler) reconcileComponent(ctx context.Context, appBundle 
 		}
 	}
 
+	// Wait for the resource to become ready
+	logger.Info("Waiting for resource to become ready", "kind", obj.GetKind(), "name", obj.GetName())
+	if err := r.waitForResourceReady(ctx, obj); err != nil {
+		componentStatus.Phase = appv1alpha1.PhaseFailed
+		componentStatus.Message = fmt.Sprintf("Resource not ready: %v", err)
+		logger.Error(err, "Resource did not become ready", "kind", obj.GetKind(), "name", obj.GetName())
+		return componentStatus, err
+	}
+
 	componentStatus.Phase = appv1alpha1.PhaseDeployed
 	componentStatus.Message = "Resource deployed successfully"
 	componentStatus.ResourceRef = &appv1alpha1.ResourceReference{
@@ -300,7 +311,227 @@ func (r *AppBundleReconciler) reconcileComponent(ctx context.Context, appBundle 
 		Namespace:  obj.GetNamespace(),
 	}
 
+	logger.Info("Resource is ready", "kind", obj.GetKind(), "name", obj.GetName())
 	return componentStatus, nil
+}
+
+// waitForResourceReady waits for a resource to become ready based on its kind
+func (r *AppBundleReconciler) waitForResourceReady(ctx context.Context, obj *unstructured.Unstructured) error {
+	logger := log.FromContext(ctx)
+	kind := obj.GetKind()
+
+	// Define timeout and poll interval
+	timeout := 5 * time.Minute
+	pollInterval := 2 * time.Second
+
+	// Resources that don't need readiness checks
+	immediatelyReadyKinds := map[string]bool{
+		"Namespace":             true,
+		"ConfigMap":             true,
+		"Secret":                true,
+		"Service":               true,
+		"PersistentVolumeClaim": true,
+		"ServiceAccount":        true,
+		"Role":                  true,
+		"RoleBinding":           true,
+		"ClusterRole":           true,
+		"ClusterRoleBinding":    true,
+		"Ingress":               true,
+		"NetworkPolicy":         true,
+	}
+
+	// If it's an immediately ready resource, return success
+	if immediatelyReadyKinds[kind] {
+		logger.Info("Resource is immediately ready", "kind", kind, "name", obj.GetName())
+		return nil
+	}
+
+	// For resources that need readiness checks
+	return wait.PollUntilContextTimeout(ctx, pollInterval, timeout, true, func(ctx context.Context) (bool, error) {
+		// Fetch the latest version of the resource
+		current := &unstructured.Unstructured{}
+		current.SetGroupVersionKind(obj.GroupVersionKind())
+		err := r.Get(ctx, types.NamespacedName{
+			Name:      obj.GetName(),
+			Namespace: obj.GetNamespace(),
+		}, current)
+
+		if err != nil {
+			if errors.IsNotFound(err) {
+				logger.V(1).Info("Resource not found yet, waiting...", "kind", kind, "name", obj.GetName())
+				return false, nil
+			}
+			return false, err
+		}
+
+		// Check readiness based on resource kind
+		switch kind {
+		case "Deployment":
+			return r.isDeploymentReady(current)
+		case "StatefulSet":
+			return r.isStatefulSetReady(current)
+		case "DaemonSet":
+			return r.isDaemonSetReady(current)
+		case "Job":
+			return r.isJobComplete(current)
+		case "Pod":
+			return r.isPodReady(current)
+		default:
+			// For unknown types, just check if they exist
+			logger.Info("Unknown resource type, considering ready", "kind", kind, "name", obj.GetName())
+			return true, nil
+		}
+	})
+}
+
+// isDeploymentReady checks if a Deployment is ready
+func (r *AppBundleReconciler) isDeploymentReady(obj *unstructured.Unstructured) (bool, error) {
+	// Get desired replicas
+	replicas, found, err := unstructured.NestedInt64(obj.Object, "spec", "replicas")
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		replicas = 1 // Default to 1 if not specified
+	}
+
+	// Get status
+	readyReplicas, found, err := unstructured.NestedInt64(obj.Object, "status", "readyReplicas")
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		readyReplicas = 0
+	}
+
+	updatedReplicas, found, err := unstructured.NestedInt64(obj.Object, "status", "updatedReplicas")
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		updatedReplicas = 0
+	}
+
+	availableReplicas, found, err := unstructured.NestedInt64(obj.Object, "status", "availableReplicas")
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		availableReplicas = 0
+	}
+
+	ready := readyReplicas == replicas &&
+		updatedReplicas == replicas &&
+		availableReplicas == replicas
+
+	return ready, nil
+}
+
+// isStatefulSetReady checks if a StatefulSet is ready
+func (r *AppBundleReconciler) isStatefulSetReady(obj *unstructured.Unstructured) (bool, error) {
+	replicas, found, err := unstructured.NestedInt64(obj.Object, "spec", "replicas")
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		replicas = 1
+	}
+
+	readyReplicas, found, err := unstructured.NestedInt64(obj.Object, "status", "readyReplicas")
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		readyReplicas = 0
+	}
+
+	return readyReplicas == replicas, nil
+}
+
+// isDaemonSetReady checks if a DaemonSet is ready
+func (r *AppBundleReconciler) isDaemonSetReady(obj *unstructured.Unstructured) (bool, error) {
+	desiredNumberScheduled, found, err := unstructured.NestedInt64(obj.Object, "status", "desiredNumberScheduled")
+	if err != nil {
+		return false, err
+	}
+	if !found || desiredNumberScheduled == 0 {
+		return false, nil
+	}
+
+	numberReady, found, err := unstructured.NestedInt64(obj.Object, "status", "numberReady")
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		numberReady = 0
+	}
+
+	return numberReady == desiredNumberScheduled, nil
+}
+
+// isJobComplete checks if a Job is complete
+func (r *AppBundleReconciler) isJobComplete(obj *unstructured.Unstructured) (bool, error) {
+	conditions, found, err := unstructured.NestedSlice(obj.Object, "status", "conditions")
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, nil
+	}
+
+	for _, condition := range conditions {
+		condMap, ok := condition.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		condType, found, err := unstructured.NestedString(condMap, "type")
+		if err != nil || !found {
+			continue
+		}
+		status, found, err := unstructured.NestedString(condMap, "status")
+		if err != nil || !found {
+			continue
+		}
+		if condType == "Complete" && status == "True" {
+			return true, nil
+		}
+		if condType == "Failed" && status == "True" {
+			return false, fmt.Errorf("job failed")
+		}
+	}
+
+	return false, nil
+}
+
+// isPodReady checks if a Pod is ready
+func (r *AppBundleReconciler) isPodReady(obj *unstructured.Unstructured) (bool, error) {
+	conditions, found, err := unstructured.NestedSlice(obj.Object, "status", "conditions")
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		return false, nil
+	}
+
+	for _, condition := range conditions {
+		condMap, ok := condition.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		condType, found, err := unstructured.NestedString(condMap, "type")
+		if err != nil || !found {
+			continue
+		}
+		status, found, err := unstructured.NestedString(condMap, "status")
+		if err != nil || !found {
+			continue
+		}
+		if condType == "Ready" && status == "True" {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 // reconcilePorchPackages handles integration with Porch for package lifecycle management
