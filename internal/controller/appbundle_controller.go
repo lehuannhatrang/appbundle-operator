@@ -599,13 +599,15 @@ func (r *AppBundleReconciler) reconcileComponentWithPorch(ctx context.Context, a
 		"adoptionPolicy": "adoptExisting",
 		"deletionPolicy": "delete",
 	}
-	
+
 	// Add injectors if target namespace is specified
-	if targetNamespace != "" {
+	// Injectors reference actual Kubernetes resources to inject into the package
+	if targetNamespace != "" && targetNamespace != appBundle.Namespace {
 		spec["injectors"] = []interface{}{
 			map[string]interface{}{
-				"name":  "namespace",
-				"value": targetNamespace,
+				"name":    targetNamespace,
+				"kind":    "Namespace",
+				"version": "v1",
 			},
 		}
 	}
