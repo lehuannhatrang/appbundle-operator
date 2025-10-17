@@ -1,0 +1,54 @@
+apiVersion: app.example.com/v1alpha1
+kind: AppBundle
+metadata:
+  name: redis-simple
+  namespace: default
+spec:
+  # Enable Porch integration for Redis package from vitu-mafeni/catalog
+  porchIntegration:
+    enabled: true
+    repository: https://github.com/vitu-mafeni/catalog
+  
+  groups:
+    # Group 0: Setup namespace
+    - name: setup
+      order: 0
+      components:
+        - name: namespace
+          order: 0
+          template:
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: redis-app
+              labels:
+                app: redis
+    
+    # Group 1: Deploy Redis using Porch
+    - name: redis
+      order: 1
+      components:
+        - name: redis-workload
+          order: 0
+          # Reference Redis package from vitu-mafeni/catalog repository
+          # Package location: workloads/general/redis
+          porchPackageRef:
+            name: redis
+            namespace: porch-packages
+            revision: main
+          template:
+            # Minimal template - actual resources from Porch package
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: redis
+              namespace: redis-app
+            spec:
+              type: ClusterIP
+              selector:
+                app: redis
+              ports:
+              - port: 6379
+                targetPort: 6379
+                name: redis
+

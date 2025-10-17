@@ -1,0 +1,340 @@
+apiVersion: app.example.com/v1alpha1
+kind: AppBundle
+metadata:
+  name: webapp-with-redis
+  namespace: default
+  labels:
+    app: webapp
+    stack: redis-backed
+spec:
+  # Enable Porch integration for Redis package management
+  porchIntegration:
+    enabled: true
+    repository: https://github.com/vitu-mafeni/catalog
+  
+  groups:
+    # Group 0: Infrastructure - Namespaces and base configuration
+    - name: infrastructure
+      order: 0
+      components:
+        - name: app-namespace
+          order: 0
+          template:
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: webapp
+              labels:
+                app: webapp
+                tier: application
+        
+        - name: cache-namespace
+          order: 1
+          template:
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: cache
+              labels:
+                app: redis
+                tier: cache
+        
+        - name: app-config
+          order: 2
+          template:
+            apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: app-config
+              namespace: webapp
+            data:
+              REDIS_HOST: "redis.cache.svc.cluster.local"
+              REDIS_PORT: "6379"
+              CACHE_ENABLED: "true"
+              SESSION_TTL: "3600"
+    
+    # Group 1: Redis Cache - Deploy Redis using Porch package
+    - name: cache-layer
+      order: 1
+      components:
+        - name: redis-secret
+          order: 0
+          template:
+            apiVersion: v1
+            kind: Secret
+            metadata:
+              name: redis-credentials
+              namespace: cache
+            type: Opaque
+            stringData:
+              redis-password: "changeme-in-production"
+        
+        - name: redis-storage
+          order: 1
+          template:
+            apiVersion: v1
+            kind: PersistentVolumeClaim
+            metadata:
+              name: redis-data
+              namespace: cache
+            spec:
+              accessModes:
+              - ReadWriteOnce
+              resources:
+                requests:
+                  storage: 10Gi
+        
+        - name: redis-deployment
+          order: 2
+          # Reference Redis package from vitu-mafeni/catalog using Porch
+          porchPackageRef:
+            name: redis
+            namespace: porch-packages
+            revision: main
+          template:
+            # Primary template for Redis service
+            # Actual deployment resources come from Porch package
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: redis
+              namespace: cache
+              labels:
+                app: redis
+                tier: cache
+              annotations:
+                service.alpha.kubernetes.io/tolerate-unready-endpoints: "true"
+            spec:
+              type: ClusterIP
+              clusterIP: None  # Headless service for StatefulSet
+              selector:
+                app: redis
+              ports:
+              - name: redis
+                port: 6379
+                targetPort: 6379
+        
+        - name: redis-public-service
+          order: 3
+          template:
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: redis-public
+              namespace: cache
+              labels:
+                app: redis
+                service-type: public
+            spec:
+              type: ClusterIP
+              selector:
+                app: redis
+              ports:
+              - name: redis
+                port: 6379
+                targetPort: 6379
+    
+    # Group 2: Application - Web application that uses Redis
+    - name: application
+      order: 2
+      components:
+        - name: webapp-deployment
+          order: 0
+          template:
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: webapp
+              namespace: webapp
+              labels:
+                app: webapp
+                tier: frontend
+            spec:
+              replicas: 3
+              selector:
+                matchLabels:
+                  app: webapp
+                  tier: frontend
+              template:
+                metadata:
+                  labels:
+                    app: webapp
+                    tier: frontend
+                spec:
+                  # Init container to wait for Redis to be ready
+                  initContainers:
+                  - name: wait-for-redis
+                    image: busybox:1.36
+                    command: 
+                    - sh
+                    - -c
+                    - |
+                      echo "Waiting for Redis to be ready..."
+                      until nc -z redis.cache.svc.cluster.local 6379; do
+                        echo "Redis not ready, waiting..."
+                        sleep 2
+                      done
+                      echo "Redis is ready!"
+                  containers:
+                  - name: webapp
+                    image: nginx:1.27-alpine
+                    ports:
+                    - containerPort: 80
+                      name: http
+                    env:
+                    - name: REDIS_HOST
+                      valueFrom:
+                        configMapKeyRef:
+                          name: app-config
+                          key: REDIS_HOST
+                    - name: REDIS_PORT
+                      valueFrom:
+                        configMapKeyRef:
+                          name: app-config
+                          key: REDIS_PORT
+                    - name: REDIS_PASSWORD
+                      valueFrom:
+                        secretKeyRef:
+                          name: redis-credentials
+                          namespace: cache
+                          key: redis-password
+                    resources:
+                      requests:
+                        cpu: 100m
+                        memory: 128Mi
+                      limits:
+                        cpu: 200m
+                        memory: 256Mi
+                    livenessProbe:
+                      httpGet:
+                        path: /
+                        port: 80
+                      initialDelaySeconds: 10
+                      periodSeconds: 10
+                    readinessProbe:
+                      httpGet:
+                        path: /
+                        port: 80
+                      initialDelaySeconds: 5
+                      periodSeconds: 5
+        
+        - name: webapp-service
+          order: 1
+          template:
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: webapp
+              namespace: webapp
+              labels:
+                app: webapp
+            spec:
+              type: LoadBalancer
+              selector:
+                app: webapp
+                tier: frontend
+              ports:
+              - name: http
+                port: 80
+                targetPort: 80
+    
+    # Group 3: Monitoring - Redis monitoring and observability
+    - name: observability
+      order: 3
+      components:
+        - name: redis-exporter
+          order: 0
+          template:
+            apiVersion: apps/v1
+            kind: Deployment
+            metadata:
+              name: redis-exporter
+              namespace: cache
+              labels:
+                app: redis-exporter
+            spec:
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: redis-exporter
+              template:
+                metadata:
+                  labels:
+                    app: redis-exporter
+                  annotations:
+                    prometheus.io/scrape: "true"
+                    prometheus.io/port: "9121"
+                    prometheus.io/path: "/metrics"
+                spec:
+                  containers:
+                  - name: redis-exporter
+                    image: oliver006/redis_exporter:v1.58.0
+                    ports:
+                    - containerPort: 9121
+                      name: metrics
+                    env:
+                    - name: REDIS_ADDR
+                      value: "redis.cache.svc.cluster.local:6379"
+                    - name: REDIS_PASSWORD
+                      valueFrom:
+                        secretKeyRef:
+                          name: redis-credentials
+                          key: redis-password
+                    resources:
+                      requests:
+                        cpu: 50m
+                        memory: 64Mi
+                      limits:
+                        cpu: 100m
+                        memory: 128Mi
+        
+        - name: exporter-service
+          order: 1
+          template:
+            apiVersion: v1
+            kind: Service
+            metadata:
+              name: redis-exporter
+              namespace: cache
+              labels:
+                app: redis-exporter
+            spec:
+              type: ClusterIP
+              selector:
+                app: redis-exporter
+              ports:
+              - name: metrics
+                port: 9121
+                targetPort: 9121
+
+---
+# Notes:
+#
+# This AppBundle demonstrates:
+# 1. Using Porch to deploy Redis from vitu-mafeni/catalog
+# 2. Ordered deployment with dependencies:
+#    - Infrastructure (namespaces, config)
+#    - Cache layer (Redis via Porch)
+#    - Application (web app using Redis)
+#    - Monitoring (Redis metrics exporter)
+# 3. Cross-namespace resource management
+# 4. Init containers for dependency checking
+# 5. Proper service discovery configuration
+#
+# Deployment order:
+#   Group 0 (infrastructure): Namespaces and ConfigMap
+#   Group 1 (cache-layer): Redis deployment via Porch + services
+#   Group 2 (application): Web app that connects to Redis
+#   Group 3 (observability): Redis monitoring
+#
+# To apply:
+#   kubectl apply -f app_v1alpha1_appbundle_app_with_redis_porch.yaml
+#
+# To verify:
+#   kubectl get appbundle webapp-with-redis
+#   kubectl get all -n webapp
+#   kubectl get all -n cache
+#
+# To test Redis connectivity from webapp:
+#   kubectl exec -n webapp deployment/webapp -- nc -zv redis.cache.svc.cluster.local 6379
+
