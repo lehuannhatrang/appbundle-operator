@@ -4,7 +4,7 @@ metadata:
   name: appbundle-with-porch
   namespace: default
 spec:
-  # Enable Porch integration for package lifecycle management
+  # Controller creates PackageVariant for each porchPackageRef
   porchIntegration:
     enabled: true
     repository: https://github.com/example/packages
@@ -15,14 +15,13 @@ spec:
       components:
         - name: service-mesh
           order: 0
-          # Reference a Porch package for this component
+          # Controller creates PackageVariant -> Porch deploys
           porchPackageRef:
             name: istio-base
             namespace: porch-packages
             revision: v1.0.0
           template:
-            # Template can be minimal when using Porch packages
-            # The actual resources will be fetched from Porch
+            # Describes expected resources for readiness check
             apiVersion: v1
             kind: ConfigMap
             metadata:

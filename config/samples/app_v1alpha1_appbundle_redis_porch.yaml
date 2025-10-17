@@ -7,7 +7,7 @@ metadata:
     app: redis
     deployment-method: porch
 spec:
-  # Enable Porch integration to fetch Redis package from catalog
+  # Controller creates PackageVariant, Porch deploys
   porchIntegration:
     enabled: true
     repository: https://github.com/vitu-mafeni/catalog
@@ -51,14 +51,13 @@ spec:
       components:
         - name: redis-deployment
           order: 0
-          # Reference the Redis package from vitu-mafeni/catalog
+          # Controller creates PackageVariant for this
           porchPackageRef:
             name: redis
             namespace: porch-packages
-            revision: main  # or specific version/tag
+            revision: main
           template:
-            # This template serves as metadata and fallback
-            # Actual Redis resources will be fetched from Porch package
+            # Describes expected resources for readiness check
             apiVersion: v1
             kind: Service
             metadata:

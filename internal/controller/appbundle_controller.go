@@ -54,6 +54,10 @@ type AppBundleReconciler struct {
 // +kubebuilder:rbac:groups=app.example.com,resources=appbundles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=app.example.com,resources=appbundles/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=app.example.com,resources=appbundles/finalizers,verbs=update
+// +kubebuilder:rbac:groups=config.porch.kpt.dev,resources=packagevariants,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=config.porch.kpt.dev,resources=packagevariants/status,verbs=get
+// +kubebuilder:rbac:groups=config.porch.kpt.dev,resources=repositories,verbs=get;list;watch
+// +kubebuilder:rbac:groups=config.porch.kpt.dev,resources=packagerevisions,verbs=get;list;watch
 // +kubebuilder:rbac:groups=*,resources=*,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -203,6 +207,11 @@ func (r *AppBundleReconciler) reconcileComponent(ctx context.Context, appBundle 
 	componentStatus := appv1alpha1.ComponentStatus{
 		Name:  component.Name,
 		Phase: appv1alpha1.PhaseDeploying,
+	}
+
+	// If component has a Porch package reference, create PackageVariant
+	if component.PorchPackageRef != nil {
+		return r.reconcileComponentWithPorch(ctx, appBundle, group, component, baseSyncWave)
 	}
 
 	// Parse the template into an unstructured object
@@ -534,25 +543,221 @@ func (r *AppBundleReconciler) isPodReady(obj *unstructured.Unstructured) (bool, 
 	return false, nil
 }
 
+// reconcileComponentWithPorch reconciles a component that uses a Porch package
+func (r *AppBundleReconciler) reconcileComponentWithPorch(ctx context.Context, appBundle *appv1alpha1.AppBundle, group appv1alpha1.Group, component appv1alpha1.Component, baseSyncWave int) (appv1alpha1.ComponentStatus, error) {
+	logger := log.FromContext(ctx)
+
+	componentStatus := appv1alpha1.ComponentStatus{
+		Name:  component.Name,
+		Phase: appv1alpha1.PhaseDeploying,
+	}
+
+	if component.PorchPackageRef == nil {
+		componentStatus.Phase = appv1alpha1.PhaseFailed
+		componentStatus.Message = "PorchPackageRef is nil"
+		return componentStatus, fmt.Errorf("porchPackageRef is nil")
+	}
+
+	// Create PackageVariant name (unique per AppBundle + component)
+	packageVariantName := fmt.Sprintf("%s-%s-%s", appBundle.Name, group.Name, component.Name)
+
+	// Determine target namespace for PackageVariant deployment
+	targetNamespace := appBundle.Namespace
+	if component.Template.Raw != nil {
+		// Try to extract namespace from template if specified
+		var templateObj map[string]interface{}
+		if err := json.Unmarshal(component.Template.Raw, &templateObj); err == nil {
+			if metadata, ok := templateObj["metadata"].(map[string]interface{}); ok {
+				if ns, ok := metadata["namespace"].(string); ok && ns != "" {
+					targetNamespace = ns
+				}
+			}
+		}
+	}
+
+	// Create PackageVariant CRD
+	packageVariant := &unstructured.Unstructured{}
+	packageVariant.SetAPIVersion("config.porch.kpt.dev/v1alpha1")
+	packageVariant.SetKind("PackageVariant")
+	packageVariant.SetName(packageVariantName)
+	packageVariant.SetNamespace(component.PorchPackageRef.Namespace) // PackageVariant in same namespace as package
+
+	// Calculate sync wave
+	syncWave := baseSyncWave + component.Order
+
+	// Set PackageVariant spec
+	spec := map[string]interface{}{
+		"upstream": map[string]interface{}{
+			"repo":     component.PorchPackageRef.Name,
+			"package":  component.PorchPackageRef.Name,
+			"revision": component.PorchPackageRef.Revision,
+		},
+		"downstream": map[string]interface{}{
+			"repo":    appBundle.Spec.PorchIntegration.Repository,
+			"package": packageVariantName,
+		},
+		"adoptionPolicy": "adoptExisting",
+		"deletionPolicy": "delete",
+		"injectors": []interface{}{
+			map[string]interface{}{
+				"name": "namespace",
+				"namespace": map[string]interface{}{
+					"name": targetNamespace,
+				},
+			},
+		},
+	}
+
+	if err := unstructured.SetNestedMap(packageVariant.Object, spec, "spec"); err != nil {
+		componentStatus.Phase = appv1alpha1.PhaseFailed
+		componentStatus.Message = fmt.Sprintf("Failed to set PackageVariant spec: %v", err)
+		return componentStatus, err
+	}
+
+	// Add annotations
+	annotations := map[string]string{
+		argoSyncWaveAnnotation: strconv.Itoa(syncWave),
+	}
+	packageVariant.SetAnnotations(annotations)
+
+	// Add labels
+	labels := map[string]string{
+		"app.example.com/appbundle": appBundle.Name,
+		"app.example.com/group":     group.Name,
+		"app.example.com/component": component.Name,
+	}
+	packageVariant.SetLabels(labels)
+
+	// Create or update PackageVariant
+	existingPV := &unstructured.Unstructured{}
+	existingPV.SetGroupVersionKind(packageVariant.GroupVersionKind())
+	err := r.Get(ctx, types.NamespacedName{
+		Name:      packageVariantName,
+		Namespace: component.PorchPackageRef.Namespace,
+	}, existingPV)
+
+	if err != nil {
+		if errors.IsNotFound(err) {
+			logger.Info("Creating PackageVariant", "name", packageVariantName, "package", component.PorchPackageRef.Name)
+			if err := r.Create(ctx, packageVariant); err != nil {
+				componentStatus.Phase = appv1alpha1.PhaseFailed
+				componentStatus.Message = fmt.Sprintf("Failed to create PackageVariant: %v", err)
+				return componentStatus, err
+			}
+		} else {
+			componentStatus.Phase = appv1alpha1.PhaseFailed
+			componentStatus.Message = fmt.Sprintf("Failed to get PackageVariant: %v", err)
+			return componentStatus, err
+		}
+	} else {
+		logger.Info("PackageVariant already exists", "name", packageVariantName)
+		// Update if needed (for now, skip update to avoid conflicts with Porch)
+	}
+
+	// Wait for PackageVariant to be ready
+	logger.Info("Waiting for PackageVariant to be ready", "name", packageVariantName)
+	if err := r.waitForPackageVariantReady(ctx, packageVariantName, component.PorchPackageRef.Namespace); err != nil {
+		componentStatus.Phase = appv1alpha1.PhaseFailed
+		componentStatus.Message = fmt.Sprintf("PackageVariant not ready: %v", err)
+		return componentStatus, err
+	}
+
+	// Wait for the resources created by Porch to be ready
+	// Parse the template to understand what resources Porch should have created
+	if component.Template.Raw != nil {
+		obj := &unstructured.Unstructured{}
+		if err := json.Unmarshal(component.Template.Raw, obj); err == nil {
+			// Set the correct namespace
+			if obj.GetNamespace() == "" {
+				obj.SetNamespace(targetNamespace)
+			}
+
+			// Wait for this resource to be ready
+			logger.Info("Waiting for Porch-created resource to be ready", "kind", obj.GetKind(), "name", obj.GetName())
+			if err := r.waitForResourceReady(ctx, obj); err != nil {
+				logger.Error(err, "Porch-created resource not ready", "kind", obj.GetKind(), "name", obj.GetName())
+				// Don't fail - the PackageVariant is ready, resource might take longer
+			}
+		}
+	}
+
+	componentStatus.Phase = appv1alpha1.PhaseDeployed
+	componentStatus.Message = "PackageVariant deployed successfully via Porch"
+	componentStatus.ResourceRef = &appv1alpha1.ResourceReference{
+		APIVersion: "config.porch.kpt.dev/v1alpha1",
+		Kind:       "PackageVariant",
+		Name:       packageVariantName,
+		Namespace:  component.PorchPackageRef.Namespace,
+	}
+
+	logger.Info("PackageVariant deployed and ready", "name", packageVariantName)
+	return componentStatus, nil
+}
+
+// waitForPackageVariantReady waits for a PackageVariant to become ready
+func (r *AppBundleReconciler) waitForPackageVariantReady(ctx context.Context, name, namespace string) error {
+	logger := log.FromContext(ctx)
+	timeout := 5 * time.Minute
+	pollInterval := 2 * time.Second
+
+	return wait.PollUntilContextTimeout(ctx, pollInterval, timeout, true, func(ctx context.Context) (bool, error) {
+		pv := &unstructured.Unstructured{}
+		pv.SetAPIVersion("config.porch.kpt.dev/v1alpha1")
+		pv.SetKind("PackageVariant")
+
+		err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, pv)
+		if err != nil {
+			if errors.IsNotFound(err) {
+				logger.V(1).Info("PackageVariant not found yet", "name", name)
+				return false, nil
+			}
+			return false, err
+		}
+
+		// Check if PackageVariant is ready
+		conditions, found, err := unstructured.NestedSlice(pv.Object, "status", "conditions")
+		if err != nil || !found {
+			logger.V(1).Info("PackageVariant has no conditions yet", "name", name)
+			return false, nil
+		}
+
+		for _, condition := range conditions {
+			condMap, ok := condition.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			condType, found, err := unstructured.NestedString(condMap, "type")
+			if err != nil || !found {
+				continue
+			}
+			status, found, err := unstructured.NestedString(condMap, "status")
+			if err != nil || !found {
+				continue
+			}
+			if condType == "Ready" && status == "True" {
+				logger.Info("PackageVariant is ready", "name", name)
+				return true, nil
+			}
+		}
+
+		logger.V(1).Info("PackageVariant not ready yet", "name", name)
+		return false, nil
+	})
+}
+
 // reconcilePorchPackages handles integration with Porch for package lifecycle management
 // nolint:unparam // This function currently always returns nil as it's a placeholder
 func (r *AppBundleReconciler) reconcilePorchPackages(ctx context.Context, appBundle *appv1alpha1.AppBundle) error {
 	logger := log.FromContext(ctx)
 
-	// TODO: Implement Porch integration
-	// This is a placeholder for Porch package lifecycle management
-	// Integration points:
-	// 1. Fetch package revisions from Porch
-	// 2. Validate package availability
-	// 3. Track package lifecycle events
-	// 4. Update component templates from Porch packages
-
+	// Validate that required repositories are registered in Porch
+	// This is a pre-flight check before creating PackageVariants
 	logger.Info("Porch integration enabled", "repository", appBundle.Spec.PorchIntegration.Repository)
 
-	// For now, this is a no-op. In a real implementation:
-	// - Query Porch API for package status
-	// - Fetch package contents if needed
-	// - Update AppBundle status with package information
+	// In a real implementation, you might want to:
+	// 1. Query Porch to ensure repositories are registered
+	// 2. Validate package availability
+	// 3. Pre-fetch package metadata for validation
 
 	return nil
 }

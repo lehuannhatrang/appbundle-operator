@@ -42,3 +42,30 @@ rules:
   - get
   - patch
   - update
+- apiGroups:
+  - config.porch.kpt.dev
+  resources:
+  - packagerevisions
+  - repositories
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - config.porch.kpt.dev
+  resources:
+  - packagevariants
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - config.porch.kpt.dev
+  resources:
+  - packagevariants/status
+  verbs:
+  - get
