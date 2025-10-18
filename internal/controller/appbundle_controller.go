@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -544,63 +543,6 @@ func (r *AppBundleReconciler) isPodReady(obj *unstructured.Unstructured) (bool, 
 	return false, nil
 }
 
-// findRepositoryForPackage finds the Repository CR that contains the specified package
-func (r *AppBundleReconciler) findRepositoryForPackage(ctx context.Context, packageName, namespace string) (string, error) {
-	logger := log.FromContext(ctx)
-
-	// List all Repository CRs in the namespace
-	repoList := &unstructured.UnstructuredList{}
-	repoList.SetAPIVersion("config.porch.kpt.dev/v1alpha1")
-	repoList.SetKind("RepositoryList")
-
-	if err := r.List(ctx, repoList, client.InNamespace(namespace)); err != nil {
-		logger.Error(err, "Failed to list repositories", "namespace", namespace)
-		return "", err
-	}
-
-	// Search for a repository that matches the package name
-	// Try to find by checking repository content or metadata
-	for _, repo := range repoList.Items {
-		repoName := repo.GetName()
-
-		// Check if repository name contains the package name
-		// or if the package name is part of the repository path
-		if strings.Contains(repoName, packageName) {
-			logger.Info("Found matching repository", "package", packageName, "repository", repoName)
-			return repoName, nil
-		}
-
-		// Also check the spec.content field if it exists
-		content, found, _ := unstructured.NestedString(repo.Object, "spec", "content")
-		if found && strings.Contains(content, packageName) {
-			logger.Info("Found matching repository by content", "package", packageName, "repository", repoName)
-			return repoName, nil
-		}
-	}
-
-	// If no match found, try listing PackageRevisions to find which repo contains this package
-	pkgRevList := &unstructured.UnstructuredList{}
-	pkgRevList.SetAPIVersion("porch.kpt.dev/v1alpha1")
-	pkgRevList.SetKind("PackageRevisionList")
-
-	if err := r.List(ctx, pkgRevList, client.InNamespace(namespace)); err != nil {
-		logger.Error(err, "Failed to list package revisions", "namespace", namespace)
-		return "", err
-	}
-
-	for _, pkgRev := range pkgRevList.Items {
-		pkgName, _, _ := unstructured.NestedString(pkgRev.Object, "spec", "packageName")
-		repoName, _, _ := unstructured.NestedString(pkgRev.Object, "spec", "repository")
-
-		if pkgName == packageName || strings.Contains(pkgName, packageName) {
-			logger.Info("Found repository via PackageRevision", "package", packageName, "repository", repoName)
-			return repoName, nil
-		}
-	}
-
-	return "", fmt.Errorf("no repository found for package %s", packageName)
-}
-
 // reconcileComponentWithPorch reconciles a component that uses a Porch package
 func (r *AppBundleReconciler) reconcileComponentWithPorch(ctx context.Context, appBundle *appv1alpha1.AppBundle, group appv1alpha1.Group, component appv1alpha1.Component, baseSyncWave int) (appv1alpha1.ComponentStatus, error) {
 	logger := log.FromContext(ctx)
@@ -616,21 +558,25 @@ func (r *AppBundleReconciler) reconcileComponentWithPorch(ctx context.Context, a
 		return componentStatus, fmt.Errorf("porchPackageRef is nil")
 	}
 
-	// Find the Repository CR that matches the package name
-	upstreamRepoName, err := r.findRepositoryForPackage(ctx, component.PorchPackageRef.Name, component.PorchPackageRef.Namespace)
-	if err != nil {
-		componentStatus.Phase = appv1alpha1.PhaseFailed
-		componentStatus.Message = fmt.Sprintf("Failed to find repository for package %s: %v", component.PorchPackageRef.Name, err)
-		return componentStatus, err
-	}
-
 	// Create PackageVariant name (custom format: appbundle-<package>)
-	packageVariantName := fmt.Sprintf("appbundle-%s", component.PorchPackageRef.Name)
+	packageVariantName := fmt.Sprintf("appbundle-%s", component.PorchPackageRef.PackageName)
+
+	// Determine namespace for PackageVariant (default to "default")
+	pvNamespace := "default"
+	if component.PorchPackageRef.Namespace != "" {
+		pvNamespace = component.PorchPackageRef.Namespace
+	}
 
 	// Determine downstream repo (default to "mgmt" or use from spec)
 	downstreamRepo := "mgmt"
-	if appBundle.Spec.PorchIntegration.Repository != "" {
+	if appBundle.Spec.PorchIntegration != nil && appBundle.Spec.PorchIntegration.Repository != "" {
 		downstreamRepo = appBundle.Spec.PorchIntegration.Repository
+	}
+
+	// Determine revision (default to "main")
+	revision := "main"
+	if component.PorchPackageRef.Revision != "" {
+		revision = component.PorchPackageRef.Revision
 	}
 
 	// Create PackageVariant CRD
@@ -638,7 +584,7 @@ func (r *AppBundleReconciler) reconcileComponentWithPorch(ctx context.Context, a
 	packageVariant.SetAPIVersion("config.porch.kpt.dev/v1alpha1")
 	packageVariant.SetKind("PackageVariant")
 	packageVariant.SetName(packageVariantName)
-	packageVariant.SetNamespace(component.PorchPackageRef.Namespace) // PackageVariant in same namespace as package
+	packageVariant.SetNamespace(pvNamespace)
 
 	// Calculate sync wave
 	syncWave := baseSyncWave + component.Order
@@ -646,9 +592,9 @@ func (r *AppBundleReconciler) reconcileComponentWithPorch(ctx context.Context, a
 	// Set PackageVariant spec
 	spec := map[string]interface{}{
 		"upstream": map[string]interface{}{
-			"repo":     upstreamRepoName,
-			"package":  upstreamRepoName, // Use repository name as package
-			"revision": component.PorchPackageRef.Revision,
+			"repo":     component.PorchPackageRef.Repository,
+			"package":  component.PorchPackageRef.PackageName,
+			"revision": revision,
 		},
 		"downstream": map[string]interface{}{
 			"repo":    downstreamRepo,
@@ -682,14 +628,14 @@ func (r *AppBundleReconciler) reconcileComponentWithPorch(ctx context.Context, a
 	// Create or update PackageVariant
 	existingPV := &unstructured.Unstructured{}
 	existingPV.SetGroupVersionKind(packageVariant.GroupVersionKind())
-	err = r.Get(ctx, types.NamespacedName{
+	err := r.Get(ctx, types.NamespacedName{
 		Name:      packageVariantName,
-		Namespace: component.PorchPackageRef.Namespace,
+		Namespace: pvNamespace,
 	}, existingPV)
 
 	if err != nil {
 		if errors.IsNotFound(err) {
-			logger.Info("Creating PackageVariant", "name", packageVariantName, "package", component.PorchPackageRef.Name)
+			logger.Info("Creating PackageVariant", "name", packageVariantName, "package", component.PorchPackageRef.PackageName)
 			if err := r.Create(ctx, packageVariant); err != nil {
 				componentStatus.Phase = appv1alpha1.PhaseFailed
 				componentStatus.Message = fmt.Sprintf("Failed to create PackageVariant: %v", err)
@@ -707,7 +653,7 @@ func (r *AppBundleReconciler) reconcileComponentWithPorch(ctx context.Context, a
 
 	// Wait for PackageVariant to be ready
 	logger.Info("Waiting for PackageVariant to be ready", "name", packageVariantName)
-	if err := r.waitForPackageVariantReady(ctx, packageVariantName, component.PorchPackageRef.Namespace); err != nil {
+	if err := r.waitForPackageVariantReady(ctx, packageVariantName, pvNamespace); err != nil {
 		componentStatus.Phase = appv1alpha1.PhaseFailed
 		componentStatus.Message = fmt.Sprintf("PackageVariant not ready: %v", err)
 		return componentStatus, err

@@ -17,8 +17,9 @@ spec:
           order: 0
           # Controller creates PackageVariant -> Porch deploys
           porchPackageRef:
-            name: istio-base
-            namespace: porch-packages
+            packageName: istio-base                   # Package name in repository
+            repository: catalog-networking            # Repository CR name
+            namespace: default                        # Where PackageVariant is created
             revision: v1.0.0
           template:
             # Describes expected resources for readiness check
@@ -36,8 +37,9 @@ spec:
         - name: prometheus
           order: 0
           porchPackageRef:
-            name: prometheus-operator
-            namespace: porch-packages
+            packageName: prometheus-operator          # Package name in repository
+            repository: catalog-monitoring            # Repository CR name
+            namespace: default                        # Where PackageVariant is created
             revision: v2.0.0
           template:
             apiVersion: v1
@@ -48,8 +50,9 @@ spec:
         - name: grafana
           order: 1
           porchPackageRef:
-            name: grafana
-            namespace: porch-packages
+            packageName: grafana                      # Package name in repository
+            repository: catalog-monitoring            # Repository CR name
+            namespace: default                        # Where PackageVariant is created
             revision: v1.5.0
           template:
             apiVersion: v1

@@ -88,8 +88,9 @@ spec:
           order: 2
           # Controller creates PackageVariant for this
           porchPackageRef:
-            name: redis
-            namespace: porch-packages
+            packageName: redis                      # Package name in repository
+            repository: catalog-workloads-general   # Repository CR name
+            namespace: default                      # Where PackageVariant is created
             revision: main
           template:
             # Describes expected resources for readiness check

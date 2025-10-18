@@ -67,15 +67,19 @@ type Group struct {
 
 // PorchPackageReference contains information to reference a Porch package
 type PorchPackageReference struct {
-	// Name of the Porch package
+	// PackageName is the name of the package in the upstream repository
 	// +kubebuilder:validation:Required
-	Name string `json:"name"`
+	PackageName string `json:"packageName"`
 
-	// Namespace of the Porch package
+	// Repository is the name of the Repository CR containing this package
+	// +kubebuilder:validation:Required
+	Repository string `json:"repository"`
+
+	// Namespace where the PackageVariant will be created
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
 
-	// Revision of the Porch package
+	// Revision of the package (e.g., "main", "v1.0.0")
 	// +optional
 	Revision string `json:"revision,omitempty"`
 }

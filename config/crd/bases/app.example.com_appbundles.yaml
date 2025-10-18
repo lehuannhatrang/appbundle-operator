@@ -66,17 +66,25 @@ spec:
                             description: PorchPackageRef references a Porch package
                               for this component
                             properties:
-                              name:
-                                description: Name of the Porch package
-                                type: string
                               namespace:
-                                description: Namespace of the Porch package
+                                description: Namespace where the PackageVariant will
+                                  be created
+                                type: string
+                              packageName:
+                                description: PackageName is the name of the package
+                                  in the upstream repository
+                                type: string
+                              repository:
+                                description: Repository is the name of the Repository
+                                  CR containing this package
                                 type: string
                               revision:
-                                description: Revision of the Porch package
+                                description: Revision of the package (e.g., "main",
+                                  "v1.0.0")
                                 type: string
                             required:
-                            - name
+                            - packageName
+                            - repository
                             type: object
                           template:
                             description: |-
