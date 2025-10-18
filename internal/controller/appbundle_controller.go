@@ -573,6 +573,12 @@ func (r *AppBundleReconciler) reconcileComponentWithPorch(ctx context.Context, a
 		downstreamRepo = appBundle.Spec.PorchIntegration.Repository
 	}
 
+	// Determine revision (default to "main")
+	revision := "main"
+	if component.PorchPackageRef.Revision != "" {
+		revision = component.PorchPackageRef.Revision
+	}
+
 	// Create PackageVariant CRD
 	packageVariant := &unstructured.Unstructured{}
 	packageVariant.SetAPIVersion("config.porch.kpt.dev/v1alpha1")
@@ -584,20 +590,18 @@ func (r *AppBundleReconciler) reconcileComponentWithPorch(ctx context.Context, a
 	syncWave := baseSyncWave + component.Order
 
 	// Set PackageVariant spec
-	upstream := map[string]interface{}{
-		"repo":    component.PorchPackageRef.Repository,
-		"package": component.PorchPackageRef.PackageName,
-	}
-
-	// Note: PackageVariant uses "revision" as an integer field for versioning
-	// Git branch/tag references are handled differently by Porch
-	// We don't set revision here as Porch will use the latest from the repo
-
 	spec := map[string]interface{}{
-		"upstream": upstream,
+		"upstream": map[string]interface{}{
+			"repo":     component.PorchPackageRef.Repository,
+			"package":  component.PorchPackageRef.PackageName,
+			"revision": revision,
+		},
 		"downstream": map[string]interface{}{
 			"repo":    downstreamRepo,
 			"package": packageVariantName,
+		},
+		"annotations": map[string]interface{}{
+			"approval.nephio.org/policy": "initial",
 		},
 		"adoptionPolicy": "adoptExisting",
 		"deletionPolicy": "delete",
@@ -609,10 +613,9 @@ func (r *AppBundleReconciler) reconcileComponentWithPorch(ctx context.Context, a
 		return componentStatus, err
 	}
 
-	// Add annotations
+	// Add annotations to metadata
 	annotations := map[string]string{
-		argoSyncWaveAnnotation:       strconv.Itoa(syncWave),
-		"approval.nephio.org/policy": "initial",
+		argoSyncWaveAnnotation: strconv.Itoa(syncWave),
 	}
 	packageVariant.SetAnnotations(annotations)
 

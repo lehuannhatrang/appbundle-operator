@@ -56,6 +56,7 @@ spec:
             packageName: redis                      # Package name in repository
             repository: catalog-workloads-general   # Repository CR name
             namespace: default                      # Where PackageVariant is created
+            revision: main                          # Git branch/tag
           template:
             # Describes expected resources for readiness check
             apiVersion: v1

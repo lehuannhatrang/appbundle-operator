@@ -20,6 +20,7 @@ spec:
             packageName: istio-base                   # Package name in repository
             repository: catalog-networking            # Repository CR name
             namespace: default                        # Where PackageVariant is created
+            revision: v1.0.0                          # Git branch/tag
           template:
             # Describes expected resources for readiness check
             apiVersion: v1
@@ -39,6 +40,7 @@ spec:
             packageName: prometheus-operator          # Package name in repository
             repository: catalog-monitoring            # Repository CR name
             namespace: default                        # Where PackageVariant is created
+            revision: v2.0.0                          # Git branch/tag
           template:
             apiVersion: v1
             kind: Namespace
@@ -51,6 +53,7 @@ spec:
             packageName: grafana                      # Package name in repository
             repository: catalog-monitoring            # Repository CR name
             namespace: default                        # Where PackageVariant is created
+            revision: v1.5.0                          # Git branch/tag
           template:
             apiVersion: v1
             kind: ConfigMap
