@@ -7,7 +7,7 @@ spec:
   # Controller creates PackageVariant for each porchPackageRef
   porchIntegration:
     enabled: true
-    repository: https://github.com/example/packages
+    repository: mgmt  # Name of downstream Repository CR (not URL)
   
   groups:
     - name: networking

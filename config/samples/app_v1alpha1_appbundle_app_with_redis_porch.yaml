@@ -10,7 +10,7 @@ spec:
   # Controller creates PackageVariant, Porch deploys
   porchIntegration:
     enabled: true
-    repository: https://github.com/vitu-mafeni/catalog
+    repository: mgmt  # Name of downstream Repository CR (not URL)
   
   groups:
     # Group 0: Infrastructure - Namespaces and base configuration
