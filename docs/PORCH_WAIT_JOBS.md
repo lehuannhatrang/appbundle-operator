@@ -46,8 +46,7 @@ The controller adds this mutator to the PackageVariant pipeline:
 - image: gcr.io/kpt-fn/starlark:v0.4.3
   configMap:
     source: |
-      load("kpt", "ResourceList")
-      # Note: Starlark doesn't support type hints
+      # KPT Starlark function - no imports needed
       def transform(resource_list):
           wait_commands = []
           
@@ -376,7 +375,12 @@ Currently, wait Jobs are automatically added to all Porch components. Future enh
 
 ## Starlark Limitations
 
-⚠️ **Important**: Starlark is a subset of Python and has some limitations:
+⚠️ **Important**: KPT Starlark functions have specific limitations:
+
+- **No imports/load statements**: KPT Starlark doesn't support loading modules
+  - ✅ Use: `def transform(resource_list):`
+  - ❌ Don't use: `load("kpt", "ResourceList")`
+  - The `resource_list` parameter is passed directly by KPT
 
 - **No type hints**: Cannot use `def func(arg: Type):` syntax
   - ✅ Use: `def func(arg):`
@@ -387,7 +391,6 @@ Currently, wait Jobs are automatically added to all Porch components. Future enh
   - ✅ Use: `"text {}".format(variable)` (format method)
   - ❌ Don't use: `f"text {variable}"` (f-string)
 
-- **No imports**: Cannot use standard Python libraries
 - **Restricted builtins**: Only basic Python functions available
 
 The controller generates Starlark-compatible code automatically, but be aware of these limitations when customizing scripts.
