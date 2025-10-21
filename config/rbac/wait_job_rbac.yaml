@@ -1,0 +1,67 @@
+# ServiceAccount for wait Jobs created by Porch pipeline mutators
+# These Jobs need to check the readiness status of workload resources
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: appbundle-wait-reader
+  namespace: default
+  labels:
+    app.kubernetes.io/name: appbundle-operator
+    app.kubernetes.io/component: wait-job
+---
+# ClusterRole for reading resource status across namespaces
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: appbundle-wait-reader
+  labels:
+    app.kubernetes.io/name: appbundle-operator
+    app.kubernetes.io/component: wait-job
+rules:
+  # Read deployments and check rollout status
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/status"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read statefulsets and check rollout status
+  - apiGroups: ["apps"]
+    resources: ["statefulsets", "statefulsets/status"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read daemonsets and check rollout status
+  - apiGroups: ["apps"]
+    resources: ["daemonsets", "daemonsets/status"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read jobs to check completion
+  - apiGroups: ["batch"]
+    resources: ["jobs", "jobs/status"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read pods to check status
+  - apiGroups: [""]
+    resources: ["pods", "pods/status"]
+    verbs: ["get", "list", "watch"]
+  
+  # Read services
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+---
+# ClusterRoleBinding to grant permissions to the ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: appbundle-wait-reader
+  labels:
+    app.kubernetes.io/name: appbundle-operator
+    app.kubernetes.io/component: wait-job
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: appbundle-wait-reader
+subjects:
+  - kind: ServiceAccount
+    name: appbundle-wait-reader
+    namespace: default
+

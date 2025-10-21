@@ -276,19 +276,48 @@ Porch (Package Orchestration for Resource Configuration Handling) is a Kubernete
 The controller will:
 1. Create the PackageVariant with **pipeline mutators**
 2. Mutators inject Argo CD sync wave annotations into all resources in the package
-3. Query the deployed PackageRevision
-4. Discover all workload resources (Deployments, StatefulSets, Services, etc.)
-5. Monitor their readiness automatically
+3. **Mutators inject wait Jobs** to ensure sequential group deployment
+4. Query the deployed PackageRevision
+5. Discover all workload resources (Deployments, StatefulSets, Services, etc.)
+6. Monitor their readiness automatically
 
 #### Pipeline Mutators for Argo CD Integration
 
 The controller automatically configures KPT pipeline mutators in the PackageVariant to inject:
 - **Argo CD sync wave annotations** - Ensures proper deployment ordering
 - **AppBundle tracking labels** - Links resources to their AppBundle/group/component
+- **Wait Jobs with Argo CD hooks** - Ensures groups wait for each other to be ready
 
 This means resources inside Porch packages get the same Argo CD integration as directly deployed resources!
 
-See [Porch Pipeline Mutators Documentation](docs/PORCH_PIPELINE_MUTATORS.md) for details.
+#### Wait Jobs for Sequential Deployment 🎯
+
+**Critical Feature**: The controller automatically injects wait Jobs between groups that use Argo CD hooks to ensure true sequential deployment:
+
+```yaml
+# Wait Job automatically injected by Starlark mutator
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: wait-database-mongodb
+  annotations:
+    argocd.argoproj.io/hook: "Sync"              # Blocks next group
+    argocd.argoproj.io/sync-wave: "150"          # Between group 1 and 2
+spec:
+  template:
+    spec:
+      containers:
+        - name: wait
+          image: bitnami/kubectl:latest
+          args:
+            # Auto-generated based on discovered resources
+            - kubectl rollout status statefulset/mongodb -n free5gc --timeout=15m
+```
+
+**Without wait Jobs**: Groups proceed immediately (race conditions)  
+**With wait Jobs**: Next group starts only after current group is fully ready ✅
+
+See [Porch Wait Jobs Documentation](docs/PORCH_WAIT_JOBS.md) for details.
 
 ### Setup
 

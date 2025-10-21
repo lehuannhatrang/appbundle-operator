@@ -597,8 +597,35 @@ func (r *AppBundleReconciler) reconcileComponentWithPorch(ctx context.Context, a
 	syncWave := baseSyncWave + component.Order
 	syncWaveStr := strconv.Itoa(syncWave)
 
+	// Calculate wait job sync wave (between current and next group)
+	// Place it at baseSyncWave + 50 (middle of the group's range)
+	waitSyncWave := baseSyncWave + 50
+	waitSyncWaveStr := strconv.Itoa(waitSyncWave)
+
+	// Build mutators list
+	mutators := []interface{}{
+		// Mutator 1: Set sync wave annotations on all resources
+		map[string]interface{}{
+			"image": "gcr.io/kpt-fn/set-annotations:v0.1.4",
+			"configMap": map[string]interface{}{
+				argoSyncWaveAnnotation: syncWaveStr,
+			},
+		},
+		// Mutator 2: Add AppBundle tracking labels to all resources
+		map[string]interface{}{
+			"image": "gcr.io/kpt-fn/set-labels:v0.2.0",
+			"configMap": map[string]interface{}{
+				"app.example.com/appbundle": appBundle.Name,
+				"app.example.com/group":     group.Name,
+				"app.example.com/component": component.Name,
+			},
+		},
+		// Mutator 3: Inject wait Job using Starlark
+		// This Job waits for all workload resources to be ready before proceeding
+		r.buildWaitJobMutator(appBundle, group, component, packageVariantName, waitSyncWaveStr),
+	}
+
 	// Set PackageVariant spec with pipeline mutators
-	// The mutators will inject Argo CD sync wave annotations into all resources in the package
 	spec := map[string]interface{}{
 		"upstream": map[string]interface{}{
 			"repo":     component.PorchPackageRef.Repository,
@@ -614,25 +641,9 @@ func (r *AppBundleReconciler) reconcileComponentWithPorch(ctx context.Context, a
 		},
 		"adoptionPolicy": "adoptExisting",
 		"deletionPolicy": "delete",
-		// Pipeline mutators to inject annotations into package resources
+		// Pipeline mutators to inject annotations and wait Job
 		"pipeline": map[string]interface{}{
-			"mutators": []interface{}{
-				map[string]interface{}{
-					"image": "gcr.io/kpt-fn/set-annotations:v0.1.4",
-					"configMap": map[string]interface{}{
-						argoSyncWaveAnnotation: syncWaveStr,
-					},
-				},
-				// Add AppBundle tracking labels to all resources
-				map[string]interface{}{
-					"image": "gcr.io/kpt-fn/set-labels:v0.2.0",
-					"configMap": map[string]interface{}{
-						"app.example.com/appbundle": appBundle.Name,
-						"app.example.com/group":     group.Name,
-						"app.example.com/component": component.Name,
-					},
-				},
-			},
+			"mutators": mutators,
 		},
 	}
 
@@ -924,6 +935,101 @@ func isInfrastructureResource(kind string) bool {
 		"LimitRange":               true,
 	}
 	return infraKinds[kind]
+}
+
+// buildWaitJobMutator creates a Starlark mutator that injects a wait Job
+// The wait Job uses Argo CD hooks to pause deployment until resources are ready
+func (r *AppBundleReconciler) buildWaitJobMutator(appBundle *appv1alpha1.AppBundle, group appv1alpha1.Group, component appv1alpha1.Component, packageName, syncWave string) map[string]interface{} {
+	// Determine namespace for the wait job
+	namespace := appBundle.Namespace
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	// Build the Starlark script that injects the wait Job
+	starlarkScript := fmt.Sprintf(`load("kpt", "ResourceList")
+
+def transform(resource_list: ResourceList):
+    # Collect resources that need waiting
+    wait_commands = []
+    target_namespace = None
+    
+    # Scan all resources in the package to determine what to wait for
+    for resource in resource_list["items"]:
+        kind = resource.get("kind", "")
+        metadata = resource.get("metadata", {})
+        name = metadata.get("name", "")
+        ns = metadata.get("namespace", "")
+        
+        # Store the target namespace from the first namespaced resource
+        if ns and not target_namespace:
+            target_namespace = ns
+        
+        # Generate wait commands based on resource type
+        if kind == "Deployment":
+            wait_commands.append(f"kubectl rollout status deployment/{name} -n {ns} --timeout=15m")
+        elif kind == "StatefulSet":
+            wait_commands.append(f"kubectl rollout status statefulset/{name} -n {ns} --timeout=15m")
+        elif kind == "DaemonSet":
+            wait_commands.append(f"kubectl rollout status daemonset/{name} -n {ns} --timeout=15m")
+        elif kind == "Job":
+            wait_commands.append(f"kubectl wait --for=condition=complete job/{name} -n {ns} --timeout=15m")
+    
+    # If no specific namespace found, use default
+    if not target_namespace:
+        target_namespace = "%s"
+    
+    # Only add wait job if there are resources to wait for
+    if wait_commands:
+        # Join all wait commands with && to run sequentially
+        wait_script = " && ".join(wait_commands)
+        
+        job_yaml = {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "name": "wait-%s-%s",
+                "namespace": target_namespace,
+                "annotations": {
+                    "argocd.argoproj.io/hook": "Sync",
+                    "argocd.argoproj.io/hook-delete-policy": "HookSucceeded",
+                    "argocd.argoproj.io/sync-wave": "%s"
+                },
+                "labels": {
+                    "app.example.com/appbundle": "%s",
+                    "app.example.com/group": "%s",
+                    "app.example.com/component": "%s",
+                    "app.example.com/wait-job": "true"
+                }
+            },
+            "spec": {
+                "ttlSecondsAfterFinished": 300,
+                "backoffLimit": 3,
+                "template": {
+                    "spec": {
+                        "restartPolicy": "Never",
+                        "serviceAccountName": "appbundle-wait-reader",
+                        "containers": [{
+                            "name": "wait",
+                            "image": "bitnami/kubectl:latest",
+                            "command": ["sh", "-c"],
+                            "args": [wait_script]
+                        }]
+                    }
+                }
+            }
+        }
+        resource_list["items"].append(job_yaml)
+    
+    return resource_list
+`, namespace, group.Name, component.Name, syncWave, appBundle.Name, group.Name, component.Name)
+
+	return map[string]interface{}{
+		"image": "gcr.io/kpt-fn/starlark:v0.5.3",
+		"configMap": map[string]interface{}{
+			"source": starlarkScript,
+		},
+	}
 }
 
 // reconcilePorchPackages handles integration with Porch for package lifecycle management
