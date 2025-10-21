@@ -214,6 +214,13 @@ func (r *AppBundleReconciler) reconcileComponent(ctx context.Context, appBundle 
 		return r.reconcileComponentWithPorch(ctx, appBundle, group, component, baseSyncWave)
 	}
 
+	// Validate that template is provided for non-Porch components
+	if len(component.Template.Raw) == 0 {
+		componentStatus.Phase = appv1alpha1.PhaseFailed
+		componentStatus.Message = "Component must have either template or porchPackageRef specified"
+		return componentStatus, fmt.Errorf("component %s has neither template nor porchPackageRef", component.Name)
+	}
+
 	// Parse the template into an unstructured object
 	obj := &unstructured.Unstructured{}
 	if err := json.Unmarshal(component.Template.Raw, obj); err != nil {
@@ -661,27 +668,46 @@ func (r *AppBundleReconciler) reconcileComponentWithPorch(ctx context.Context, a
 		return componentStatus, err
 	}
 
-	// Wait for the resources created by Porch to be ready
-	// Parse the template to understand what resources Porch should have created
-	if component.Template.Raw != nil {
+	// Auto-discover and monitor resources from the deployed package
+	var resourcesToMonitor []*unstructured.Unstructured
+
+	// If template is provided, use it (backward compatibility)
+	if len(component.Template.Raw) > 0 {
 		obj := &unstructured.Unstructured{}
 		if err := json.Unmarshal(component.Template.Raw, obj); err == nil {
 			// Set the correct namespace (default to AppBundle namespace)
 			if obj.GetNamespace() == "" {
 				obj.SetNamespace(appBundle.Namespace)
 			}
+			resourcesToMonitor = append(resourcesToMonitor, obj)
+			logger.Info("Using provided template for resource monitoring", "kind", obj.GetKind(), "name", obj.GetName())
+		}
+	} else {
+		// Auto-discover resources from the PackageVariant
+		logger.Info("No template provided, auto-discovering resources from Porch package")
+		discoveredResources, err := r.discoverPackageVariantResources(ctx, packageVariantName, pvNamespace, downstreamRepo)
+		if err != nil {
+			logger.Info("Failed to discover resources from package, will continue", "error", err)
+			// Don't fail - the PackageVariant is ready, resource discovery might take time
+		} else if len(discoveredResources) > 0 {
+			resourcesToMonitor = discoveredResources
+			logger.Info("Auto-discovered resources from package", "count", len(discoveredResources))
+		}
+	}
 
-			// Wait for this resource to be ready
-			logger.Info("Waiting for Porch-created resource to be ready", "kind", obj.GetKind(), "name", obj.GetName())
-			if err := r.waitForResourceReady(ctx, obj); err != nil {
-				logger.Error(err, "Porch-created resource not ready", "kind", obj.GetKind(), "name", obj.GetName())
-				// Don't fail - the PackageVariant is ready, resource might take longer
-			}
+	// Wait for discovered/specified resources to be ready
+	for _, obj := range resourcesToMonitor {
+		logger.Info("Waiting for Porch-deployed resource to be ready", "kind", obj.GetKind(), "name", obj.GetName(), "namespace", obj.GetNamespace())
+		if err := r.waitForResourceReady(ctx, obj); err != nil {
+			logger.Error(err, "Porch-deployed resource not ready yet", "kind", obj.GetKind(), "name", obj.GetName())
+			// Don't fail - the PackageVariant is ready, resources might take longer to become ready
+		} else {
+			logger.Info("Resource is ready", "kind", obj.GetKind(), "name", obj.GetName())
 		}
 	}
 
 	componentStatus.Phase = appv1alpha1.PhaseDeployed
-	componentStatus.Message = "PackageVariant deployed successfully via Porch"
+	componentStatus.Message = fmt.Sprintf("PackageVariant deployed successfully via Porch (%d resources monitored)", len(resourcesToMonitor))
 	componentStatus.ResourceRef = &appv1alpha1.ResourceReference{
 		APIVersion: "config.porch.kpt.dev/v1alpha1",
 		Kind:       "PackageVariant",
@@ -744,6 +770,140 @@ func (r *AppBundleReconciler) waitForPackageVariantReady(ctx context.Context, na
 	})
 }
 
+// discoverPackageVariantResources discovers resources deployed by a PackageVariant
+// It queries the downstream PackageRevision created by the PackageVariant to find
+// all resources that were deployed
+func (r *AppBundleReconciler) discoverPackageVariantResources(ctx context.Context, packageVariantName, pvNamespace, downstreamRepo string) ([]*unstructured.Unstructured, error) {
+	logger := log.FromContext(ctx)
+
+	// Get the PackageVariant to find the downstream PackageRevision
+	pv := &unstructured.Unstructured{}
+	pv.SetAPIVersion("config.porch.kpt.dev/v1alpha1")
+	pv.SetKind("PackageVariant")
+
+	if err := r.Get(ctx, types.NamespacedName{Name: packageVariantName, Namespace: pvNamespace}, pv); err != nil {
+		return nil, fmt.Errorf("failed to get PackageVariant: %w", err)
+	}
+
+	// Get the downstream package name from PackageVariant status
+	downstreamPkgName, found, err := unstructured.NestedString(pv.Object, "status", "downstreamTargets", "0", "name")
+	if err != nil || !found {
+		logger.Info("Downstream package not yet created in PackageVariant status, will retry")
+		return nil, fmt.Errorf("downstream package not found in status")
+	}
+
+	logger.Info("Found downstream package", "name", downstreamPkgName, "namespace", pvNamespace)
+
+	// Query the PackageRevision to get the deployed resources
+	// The PackageRevision contains the actual resource manifests
+	prList := &unstructured.UnstructuredList{}
+	prList.SetAPIVersion("porch.kpt.dev/v1alpha1")
+	prList.SetKind("PackageRevisionList")
+
+	// List PackageRevisions matching our downstream package
+	listOpts := []client.ListOption{
+		client.InNamespace(pvNamespace),
+	}
+
+	if err := r.List(ctx, prList, listOpts...); err != nil {
+		return nil, fmt.Errorf("failed to list PackageRevisions: %w", err)
+	}
+
+	var targetPR *unstructured.Unstructured
+	for i := range prList.Items {
+		pr := &prList.Items[i]
+		prName := pr.GetName()
+
+		// Match PackageRevisions that belong to our downstream package
+		// PackageRevision names typically follow pattern: <repo>-<package>-<revision>
+		// We need to check the spec to match correctly
+		specPackage, found, err := unstructured.NestedString(pr.Object, "spec", "packageName")
+		if err != nil || !found {
+			continue
+		}
+
+		specRepo, found, err := unstructured.NestedString(pr.Object, "spec", "repositoryName")
+		if err != nil || !found {
+			continue
+		}
+
+		if specPackage == packageVariantName && specRepo == downstreamRepo {
+			targetPR = pr
+			logger.Info("Found matching PackageRevision", "name", prName)
+			break
+		}
+	}
+
+	if targetPR == nil {
+		logger.Info("PackageRevision not found yet for package", "package", packageVariantName)
+		return nil, fmt.Errorf("packageRevision not found for downstream package")
+	}
+
+	// Get the resources from the PackageRevision
+	// Resources are stored in spec.resources
+	resources, found, err := unstructured.NestedSlice(targetPR.Object, "spec", "resources")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get resources from PackageRevision: %w", err)
+	}
+	if !found {
+		logger.Info("No resources found in PackageRevision yet")
+		return nil, nil
+	}
+
+	logger.Info("Found resources in PackageRevision", "count", len(resources))
+
+	// Parse each resource into an unstructured object
+	var discoveredResources []*unstructured.Unstructured
+	for _, res := range resources {
+		resMap, ok := res.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		// Get the resource data/content
+		content, found, err := unstructured.NestedString(resMap, "data")
+		if err != nil || !found {
+			continue
+		}
+
+		// Parse the YAML/JSON content into unstructured
+		obj := &unstructured.Unstructured{}
+		if err := json.Unmarshal([]byte(content), obj); err != nil {
+			// Try as YAML if JSON fails
+			logger.V(1).Info("Failed to parse resource as JSON, might be YAML", "error", err)
+			continue
+		}
+
+		// Filter out non-workload resources (we want to monitor actual workloads)
+		kind := obj.GetKind()
+		if kind != "" && !isInfrastructureResource(kind) {
+			discoveredResources = append(discoveredResources, obj)
+			logger.Info("Discovered resource from package", "kind", kind, "name", obj.GetName())
+		}
+	}
+
+	return discoveredResources, nil
+}
+
+// isInfrastructureResource checks if a resource kind is infrastructure (non-workload)
+// Infrastructure resources don't need readiness monitoring
+func isInfrastructureResource(kind string) bool {
+	infraKinds := map[string]bool{
+		"Namespace":                true,
+		"ConfigMap":                true,
+		"Secret":                   true,
+		"ServiceAccount":           true,
+		"Role":                     true,
+		"RoleBinding":              true,
+		"ClusterRole":              true,
+		"ClusterRoleBinding":       true,
+		"CustomResourceDefinition": true,
+		"ResourceQuota":            true,
+		"LimitRange":               true,
+	}
+	return infraKinds[kind]
+}
+
 // reconcilePorchPackages handles integration with Porch for package lifecycle management
 // nolint:unparam // This function currently always returns nil as it's a placeholder
 func (r *AppBundleReconciler) reconcilePorchPackages(ctx context.Context, appBundle *appv1alpha1.AppBundle) error {
@@ -789,23 +949,47 @@ func (r *AppBundleReconciler) finalizeAppBundle(ctx context.Context, appBundle *
 		})
 
 		for _, component := range sortedComponents {
-			// Parse the template to get resource info
-			obj := &unstructured.Unstructured{}
-			if err := json.Unmarshal(component.Template.Raw, obj); err != nil {
-				logger.Error(err, "Failed to parse template during cleanup", "component", component.Name)
+			// If component uses Porch, delete the PackageVariant
+			// The PackageVariant deletion will cascade to deployed resources
+			if component.PorchPackageRef != nil {
+				pvName := fmt.Sprintf("appbundle-%s", component.PorchPackageRef.PackageName)
+				pvNamespace := "default"
+				if component.PorchPackageRef.Namespace != "" {
+					pvNamespace = component.PorchPackageRef.Namespace
+				}
+
+				pv := &unstructured.Unstructured{}
+				pv.SetAPIVersion("config.porch.kpt.dev/v1alpha1")
+				pv.SetKind("PackageVariant")
+				pv.SetName(pvName)
+				pv.SetNamespace(pvNamespace)
+
+				logger.Info("Deleting PackageVariant", "name", pvName, "namespace", pvNamespace)
+				if err := r.Delete(ctx, pv); err != nil && !errors.IsNotFound(err) {
+					logger.Error(err, "Failed to delete PackageVariant", "name", pvName)
+				}
 				continue
 			}
 
-			// Set namespace if not specified in template
-			if obj.GetNamespace() == "" && appBundle.Namespace != "" {
-				obj.SetNamespace(appBundle.Namespace)
-			}
+			// For non-Porch components, parse template and delete resource
+			if len(component.Template.Raw) > 0 {
+				obj := &unstructured.Unstructured{}
+				if err := json.Unmarshal(component.Template.Raw, obj); err != nil {
+					logger.Error(err, "Failed to parse template during cleanup", "component", component.Name)
+					continue
+				}
 
-			// Try to delete the resource (ignore NotFound errors)
-			logger.Info("Deleting resource", "kind", obj.GetKind(), "name", obj.GetName(), "namespace", obj.GetNamespace())
-			if err := r.Delete(ctx, obj); err != nil && !errors.IsNotFound(err) {
-				logger.Error(err, "Failed to delete resource", "kind", obj.GetKind(), "name", obj.GetName())
-				// Continue with other resources even if one fails
+				// Set namespace if not specified in template
+				if obj.GetNamespace() == "" && appBundle.Namespace != "" {
+					obj.SetNamespace(appBundle.Namespace)
+				}
+
+				// Try to delete the resource (ignore NotFound errors)
+				logger.Info("Deleting resource", "kind", obj.GetKind(), "name", obj.GetName(), "namespace", obj.GetNamespace())
+				if err := r.Delete(ctx, obj); err != nil && !errors.IsNotFound(err) {
+					logger.Error(err, "Failed to delete resource", "kind", obj.GetKind(), "name", obj.GetName())
+					// Continue with other resources even if one fails
+				}
 			}
 		}
 	}

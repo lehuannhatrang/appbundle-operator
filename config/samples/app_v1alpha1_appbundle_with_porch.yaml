@@ -16,20 +16,12 @@ spec:
         - name: service-mesh
           order: 0
           # Controller creates PackageVariant -> Porch deploys
+          # No template needed - controller auto-discovers resources from package
           porchPackageRef:
             packageName: istio-base                   # Package name in repository
             repository: catalog-networking            # Repository CR name
             namespace: default                        # Where PackageVariant is created
             revision: v1.0.0                          # Git branch/tag
-          template:
-            # Describes expected resources for readiness check
-            apiVersion: v1
-            kind: ConfigMap
-            metadata:
-              name: service-mesh-config
-              namespace: default
-            data:
-              mesh: istio
     
     - name: monitoring
       order: 1

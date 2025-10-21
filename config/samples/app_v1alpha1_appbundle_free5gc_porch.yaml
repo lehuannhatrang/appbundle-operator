@@ -10,15 +10,29 @@ spec:
     repository: mgmt  # Name of downstream Repository CR (not URL)
   
   groups:
-    - name: free5gc
+    - name: setup
       order: 0
+      components:
+        - name: namespace
+          order: 0
+          template:
+            apiVersion: v1
+            kind: Namespace
+            metadata:
+              name: redis-app
+              labels:
+                app: redis
+    
+    - name: free5gc
+      order: 1
       components:
         - name: free5gc-workload
           order: 0
           # Controller creates PackageVariant -> Porch deploys resources
+          # No template needed - controller auto-discovers resources from package
           porchPackageRef:
             packageName: free5gc-cp                      # Package name in repository
             repository: catalog-workloads-free5gc   # Repository CR name
             namespace: default                      # Where PackageVariant is created
             revision: main                          # Git branch/tag
-          
+

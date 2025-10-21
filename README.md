@@ -256,17 +256,48 @@ Porch (Package Orchestration for Resource Configuration Handling) is a Kubernete
 - **Package Lifecycle Management**: Track package versions and revisions
 - **Centralized Repository**: Store and manage application packages
 - **Version Control**: Rollback and upgrade packages easily
+- **Auto-Discovery**: Automatically discovers and monitors resources from packages
+
+### Auto-Discovery Feature ✨
+
+**No template needed when using Porch!** The controller automatically discovers what resources are inside your packages:
+
+```yaml
+- name: redis-workload
+  order: 0
+  porchPackageRef:
+    packageName: redis
+    repository: catalog-workloads-general
+    namespace: default
+    revision: main
+  # No template field required - controller auto-discovers resources!
+```
+
+The controller will:
+1. Create the PackageVariant
+2. Query the deployed PackageRevision
+3. Discover all workload resources (Deployments, StatefulSets, Services, etc.)
+4. Monitor their readiness automatically
+
+See [Porch Auto-Discovery Documentation](docs/PORCH_AUTO_DISCOVERY.md) for details.
 
 ### Setup
 
 1. Install Porch in your cluster
 2. Create a Porch repository
 3. Publish packages to the repository
-4. Reference packages in AppBundle components
+4. Reference packages in AppBundle components (no template needed!)
 
 ### Implementation Status
 
-The Porch integration framework is in place with placeholder methods. To complete the integration:
+The Porch integration includes:
+- ✅ PackageVariant creation and management
+- ✅ Automatic resource discovery from packages
+- ✅ Readiness monitoring for discovered resources
+- ✅ Cleanup via PackageVariant deletion
+- 🚧 Direct Porch API integration (uses unstructured client)
+
+To enhance the integration with direct Porch API support:
 
 1. Add Porch API dependencies:
    ```bash
@@ -275,8 +306,6 @@ The Porch integration framework is in place with placeholder methods. To complet
    ```
 
 2. Implement the methods in `internal/porch/porch_client.go`
-
-3. Update the controller to fetch package contents from Porch
 
 See `internal/porch/porch_client.go` for detailed integration notes.
 

@@ -38,11 +38,15 @@ type Component struct {
 
 	// Template is the Kubernetes resource template to be deployed
 	// This can be any valid Kubernetes resource (Deployment, Service, ConfigMap, etc.)
-	// +kubebuilder:validation:Required
+	// When PorchPackageRef is specified, Template is optional - the controller will
+	// auto-discover resources from the deployed package
+	// +optional
 	// +kubebuilder:pruning:PreserveUnknownFields
-	Template runtime.RawExtension `json:"template"`
+	Template runtime.RawExtension `json:"template,omitempty"`
 
 	// PorchPackageRef references a Porch package for this component
+	// When specified, the controller creates a PackageVariant and auto-discovers
+	// the resources deployed by Porch for monitoring
 	// +optional
 	PorchPackageRef *PorchPackageReference `json:"porchPackageRef,omitempty"`
 }

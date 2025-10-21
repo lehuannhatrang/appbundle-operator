@@ -29,23 +29,10 @@ spec:
         - name: redis-workload
           order: 0
           # Controller creates PackageVariant -> Porch deploys resources
+          # No template needed - controller auto-discovers resources from package
           porchPackageRef:
             packageName: redis                      # Package name in repository
             repository: catalog-workloads-general   # Repository CR name
             namespace: default                      # Where PackageVariant is created
             revision: main                          # Git branch/tag
-          template:
-            # Describes expected resources for readiness check
-            apiVersion: v1
-            kind: Service
-            metadata:
-              name: redis
-              namespace: redis-app
-            spec:
-              type: ClusterIP
-              selector:
-                app: redis
-              ports:
-              - port: 6379
-                targetPort: 6379
 

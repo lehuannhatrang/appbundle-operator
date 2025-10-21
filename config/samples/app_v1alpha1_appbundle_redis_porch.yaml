@@ -51,31 +51,13 @@ spec:
       components:
         - name: redis-deployment
           order: 0
-          # Controller creates PackageVariant for this
+          # Controller creates PackageVariant and auto-discovers resources
+          # No template needed - controller monitors all workload resources in package
           porchPackageRef:
             packageName: redis                      # Package name in repository
             repository: catalog-workloads-general   # Repository CR name
             namespace: default                      # Where PackageVariant is created
             revision: main                          # Git branch/tag
-          template:
-            # Describes expected resources for readiness check
-            apiVersion: v1
-            kind: Service
-            metadata:
-              name: redis
-              namespace: redis
-              labels:
-                app: redis
-                component: cache
-            spec:
-              type: ClusterIP
-              selector:
-                app: redis
-              ports:
-              - name: redis
-                port: 6379
-                targetPort: 6379
-                protocol: TCP
     
     # Group 2: Monitoring - Optional Redis monitoring
     - name: monitoring
