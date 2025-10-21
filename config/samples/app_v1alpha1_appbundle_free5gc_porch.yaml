@@ -10,21 +10,8 @@ spec:
     repository: mgmt  # Name of downstream Repository CR (not URL)
   
   groups:
-    - name: setup
-      order: 0
-      components:
-        - name: namespace
-          order: 0
-          template:
-            apiVersion: v1
-            kind: Namespace
-            metadata:
-              name: redis-app
-              labels:
-                app: redis
-    
     - name: free5gc
-      order: 1
+      order: 0
       components:
         - name: free5gc-workload
           order: 0

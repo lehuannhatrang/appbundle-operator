@@ -274,12 +274,21 @@ Porch (Package Orchestration for Resource Configuration Handling) is a Kubernete
 ```
 
 The controller will:
-1. Create the PackageVariant
-2. Query the deployed PackageRevision
-3. Discover all workload resources (Deployments, StatefulSets, Services, etc.)
-4. Monitor their readiness automatically
+1. Create the PackageVariant with **pipeline mutators**
+2. Mutators inject Argo CD sync wave annotations into all resources in the package
+3. Query the deployed PackageRevision
+4. Discover all workload resources (Deployments, StatefulSets, Services, etc.)
+5. Monitor their readiness automatically
 
-See [Porch Auto-Discovery Documentation](docs/PORCH_AUTO_DISCOVERY.md) for details.
+#### Pipeline Mutators for Argo CD Integration
+
+The controller automatically configures KPT pipeline mutators in the PackageVariant to inject:
+- **Argo CD sync wave annotations** - Ensures proper deployment ordering
+- **AppBundle tracking labels** - Links resources to their AppBundle/group/component
+
+This means resources inside Porch packages get the same Argo CD integration as directly deployed resources!
+
+See [Porch Pipeline Mutators Documentation](docs/PORCH_PIPELINE_MUTATORS.md) for details.
 
 ### Setup
 

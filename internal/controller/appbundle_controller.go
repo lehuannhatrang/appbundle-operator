@@ -595,8 +595,10 @@ func (r *AppBundleReconciler) reconcileComponentWithPorch(ctx context.Context, a
 
 	// Calculate sync wave
 	syncWave := baseSyncWave + component.Order
+	syncWaveStr := strconv.Itoa(syncWave)
 
-	// Set PackageVariant spec
+	// Set PackageVariant spec with pipeline mutators
+	// The mutators will inject Argo CD sync wave annotations into all resources in the package
 	spec := map[string]interface{}{
 		"upstream": map[string]interface{}{
 			"repo":     component.PorchPackageRef.Repository,
@@ -612,6 +614,26 @@ func (r *AppBundleReconciler) reconcileComponentWithPorch(ctx context.Context, a
 		},
 		"adoptionPolicy": "adoptExisting",
 		"deletionPolicy": "delete",
+		// Pipeline mutators to inject annotations into package resources
+		"pipeline": map[string]interface{}{
+			"mutators": []interface{}{
+				map[string]interface{}{
+					"image": "gcr.io/kpt-fn/set-annotations:v0.1.4",
+					"configMap": map[string]interface{}{
+						argoSyncWaveAnnotation: syncWaveStr,
+					},
+				},
+				// Add AppBundle tracking labels to all resources
+				map[string]interface{}{
+					"image": "gcr.io/kpt-fn/set-labels:v0.2.0",
+					"configMap": map[string]interface{}{
+						"app.example.com/appbundle": appBundle.Name,
+						"app.example.com/group":     group.Name,
+						"app.example.com/component": component.Name,
+					},
+				},
+			},
+		},
 	}
 
 	if err := unstructured.SetNestedMap(packageVariant.Object, spec, "spec"); err != nil {

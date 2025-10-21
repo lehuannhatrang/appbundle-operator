@@ -1,0 +1,37 @@
+apiVersion: app.example.com/v1alpha1
+kind: AppBundle
+metadata:
+  name: free5gc-appbundle-order
+  namespace: default
+spec:
+  # Porch integration - controller will create PackageVariant
+  porchIntegration:
+    enabled: true
+    repository: cluster1  # Name of downstream Repository CR (not URL)
+  
+  groups:
+    - name: free5gc-mongo
+      order: 0
+      components:
+        - name: free5gc-mongo
+          order: 0
+          # Controller creates PackageVariant -> Porch deploys resources
+          # No template needed - controller auto-discovers resources from package
+          porchPackageRef:
+            packageName: free5gc-mongo                      # Package name in repository
+            repository: lehuannhatrang-workloads-free5gc  # Repository CR name
+            namespace: default                      # Where PackageVariant is created
+            revision: main                          # Git branch/tag
+    - name: free5gc-workload
+      order: 1
+      components:
+        - name: free5gc-workload
+          order: 0
+          # Controller creates PackageVariant -> Porch deploys resources
+          # No template needed - controller auto-discovers resources from package
+          porchPackageRef:
+            packageName: free5gc-cp                      # Package name in repository
+            repository: lehuannhatrang-workloads-free5gc  # Repository CR name
+            namespace: default                      # Where PackageVariant is created
+            revision: main                          # Git branch/tag
+
