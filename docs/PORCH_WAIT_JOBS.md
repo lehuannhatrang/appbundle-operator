@@ -47,7 +47,8 @@ The controller adds this mutator to the PackageVariant pipeline:
   configMap:
     source: |
       load("kpt", "ResourceList")
-      def transform(resource_list: ResourceList):
+      # Note: Starlark doesn't support type hints
+      def transform(resource_list):
           wait_commands = []
           
           # Scan resources and generate wait commands
@@ -376,6 +377,10 @@ Currently, wait Jobs are automatically added to all Porch components. Future enh
 ## Starlark Limitations
 
 ⚠️ **Important**: Starlark is a subset of Python and has some limitations:
+
+- **No type hints**: Cannot use `def func(arg: Type):` syntax
+  - ✅ Use: `def func(arg):`
+  - ❌ Don't use: `def func(arg: Type):`
 
 - **No f-strings**: Cannot use `f"text {variable}"` syntax
   - ✅ Use: `"text " + variable` (string concatenation)

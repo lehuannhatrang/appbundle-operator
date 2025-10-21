@@ -947,9 +947,10 @@ func (r *AppBundleReconciler) buildWaitJobMutator(appBundle *appv1alpha1.AppBund
 	}
 
 	// Build the Starlark script that injects the wait Job
+	// Note: Starlark doesn't support type hints, so no ": ResourceList" annotation
 	starlarkScript := fmt.Sprintf(`load("kpt", "ResourceList")
 
-def transform(resource_list: ResourceList):
+def transform(resource_list):
     # Collect resources that need waiting
     wait_commands = []
     target_namespace = None
