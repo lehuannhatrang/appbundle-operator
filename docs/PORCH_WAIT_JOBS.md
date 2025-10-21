@@ -43,7 +43,7 @@ For every component with `porchPackageRef`, the controller adds a Starlark mutat
 The controller adds this mutator to the PackageVariant pipeline:
 
 ```yaml
-- image: gcr.io/kpt-fn/starlark:v0.5.3
+- image: gcr.io/kpt-fn/starlark:v0.4.3
   configMap:
     source: |
       load("kpt", "ResourceList")

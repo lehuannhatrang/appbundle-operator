@@ -1025,7 +1025,7 @@ def transform(resource_list: ResourceList):
 `, namespace, group.Name, component.Name, syncWave, appBundle.Name, group.Name, component.Name)
 
 	return map[string]interface{}{
-		"image": "gcr.io/kpt-fn/starlark:v0.5.3",
+		"image": "gcr.io/kpt-fn/starlark:v0.4.3",
 		"configMap": map[string]interface{}{
 			"source": starlarkScript,
 		},
