@@ -966,14 +966,15 @@ def transform(resource_list: ResourceList):
             target_namespace = ns
         
         # Generate wait commands based on resource type
+        # Note: Starlark doesn't support f-strings, use string concatenation
         if kind == "Deployment":
-            wait_commands.append(f"kubectl rollout status deployment/{name} -n {ns} --timeout=15m")
+            wait_commands.append("kubectl rollout status deployment/" + name + " -n " + ns + " --timeout=15m")
         elif kind == "StatefulSet":
-            wait_commands.append(f"kubectl rollout status statefulset/{name} -n {ns} --timeout=15m")
+            wait_commands.append("kubectl rollout status statefulset/" + name + " -n " + ns + " --timeout=15m")
         elif kind == "DaemonSet":
-            wait_commands.append(f"kubectl rollout status daemonset/{name} -n {ns} --timeout=15m")
+            wait_commands.append("kubectl rollout status daemonset/" + name + " -n " + ns + " --timeout=15m")
         elif kind == "Job":
-            wait_commands.append(f"kubectl wait --for=condition=complete job/{name} -n {ns} --timeout=15m")
+            wait_commands.append("kubectl wait --for=condition=complete job/" + name + " -n " + ns + " --timeout=15m")
     
     # If no specific namespace found, use default
     if not target_namespace:

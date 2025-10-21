@@ -57,10 +57,11 @@ The controller adds this mutator to the PackageVariant pipeline:
               name = metadata.get("name", "")
               ns = metadata.get("namespace", "")
               
+              # Note: Starlark doesn't support f-strings, use string concatenation
               if kind == "Deployment":
-                  wait_commands.append(f"kubectl rollout status deployment/{name} -n {ns} --timeout=15m")
+                  wait_commands.append("kubectl rollout status deployment/" + name + " -n " + ns + " --timeout=15m")
               elif kind == "StatefulSet":
-                  wait_commands.append(f"kubectl rollout status statefulset/{name} -n {ns} --timeout=15m")
+                  wait_commands.append("kubectl rollout status statefulset/" + name + " -n " + ns + " --timeout=15m")
               # ... etc
           
           # Create wait Job with Argo CD hooks
@@ -372,10 +373,25 @@ Currently, wait Jobs are automatically added to all Porch components. Future enh
 | **Argo CD Health Checks** | ✅ Built-in | ❌ Limited resource types<br>❌ No cross-group waiting |
 | **Manual kubectl wait** | ✅ Direct control | ❌ Not GitOps<br>❌ Hard to maintain |
 
+## Starlark Limitations
+
+⚠️ **Important**: Starlark is a subset of Python and has some limitations:
+
+- **No f-strings**: Cannot use `f"text {variable}"` syntax
+  - ✅ Use: `"text " + variable` (string concatenation)
+  - ✅ Use: `"text {}".format(variable)` (format method)
+  - ❌ Don't use: `f"text {variable}"` (f-string)
+
+- **No imports**: Cannot use standard Python libraries
+- **Restricted builtins**: Only basic Python functions available
+
+The controller generates Starlark-compatible code automatically, but be aware of these limitations when customizing scripts.
+
 ## References
 
 - [Argo CD Sync Hooks](https://argo-cd.readthedocs.io/en/stable/user-guide/resource_hooks/)
 - [Argo CD Sync Waves](https://argo-cd.readthedocs.io/en/stable/user-guide/sync-waves/)
-- [KPT Starlark Function](https://catalog.kpt.dev/starlark/v0.5/)
+- [KPT Starlark Function](https://catalog.kpt.dev/starlark/v0.4/)
+- [Starlark Language Specification](https://github.com/bazelbuild/starlark/blob/master/spec.md)
 - [kubectl wait Command](https://kubernetes.io/docs/reference/generated/kubectl/kubectl-commands#wait)
 
