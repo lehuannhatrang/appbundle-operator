@@ -84,6 +84,9 @@ The controller adds this mutator to the PackageVariant pipeline:
           }
           resource_list["items"].append(job_yaml)
           return resource_list
+      
+      # Call the transform function
+      transform(resource_list)
 ```
 
 ### 3. Generated Wait Job

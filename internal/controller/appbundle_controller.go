@@ -949,11 +949,11 @@ func (r *AppBundleReconciler) buildWaitJobMutator(appBundle *appv1alpha1.AppBund
 	// Build the Starlark script that injects the wait Job
 	// Note: KPT Starlark doesn't need imports - resource_list is passed directly
 	starlarkScript := fmt.Sprintf(`def transform(resource_list):
-    # Collect resources that need waiting
-    wait_commands = []
+    # Determine the target namespace from resources in the package
     target_namespace = None
+    specific_wait_commands = []
     
-    # Scan all resources in the package to determine what to wait for
+    # Scan all resources in the package to determine namespace and specific resources
     for resource in resource_list["items"]:
         kind = resource.get("kind", "")
         metadata = resource.get("metadata", {})
@@ -964,27 +964,29 @@ func (r *AppBundleReconciler) buildWaitJobMutator(appBundle *appv1alpha1.AppBund
         if ns and not target_namespace:
             target_namespace = ns
         
-        # Generate wait commands based on resource type
+        # Collect specific wait commands for known workload resources
         # Note: Starlark doesn't support f-strings, use string concatenation
-        if kind == "Deployment":
-            wait_commands.append("kubectl rollout status deployment/" + name + " -n " + ns + " --timeout=15m")
-        elif kind == "StatefulSet":
-            wait_commands.append("kubectl rollout status statefulset/" + name + " -n " + ns + " --timeout=15m")
-        elif kind == "DaemonSet":
-            wait_commands.append("kubectl rollout status daemonset/" + name + " -n " + ns + " --timeout=15m")
-        elif kind == "Job":
-            wait_commands.append("kubectl wait --for=condition=complete job/" + name + " -n " + ns + " --timeout=15m")
+        if kind == "Deployment" and name and ns:
+            specific_wait_commands.append("kubectl rollout status deployment/" + name + " -n " + ns + " --timeout=15m")
+        elif kind == "StatefulSet" and name and ns:
+            specific_wait_commands.append("kubectl rollout status statefulset/" + name + " -n " + ns + " --timeout=15m")
+        elif kind == "DaemonSet" and name and ns:
+            specific_wait_commands.append("kubectl rollout status daemonset/" + name + " -n " + ns + " --timeout=15m")
     
     # If no specific namespace found, use default
     if not target_namespace:
         target_namespace = "%s"
     
-    # Only add wait job if there are resources to wait for
-    if wait_commands:
-        # Join all wait commands with && to run sequentially
-        wait_script = " && ".join(wait_commands)
-        
-        job_yaml = {
+    # Build wait script - always create a wait job
+    # If we found specific resources, wait for them. Otherwise, wait for any deployments/statefulsets in namespace
+    if specific_wait_commands:
+        wait_script = " && ".join(specific_wait_commands)
+    else:
+        # Generic wait: check for any deployments or statefulsets in the namespace
+        wait_script = "echo 'Waiting for workloads in namespace " + target_namespace + "...' && sleep 5 && " + "for deploy in $(kubectl get deployments -n " + target_namespace + " -o name 2>/dev/null || echo ''); do " + "if [ -n \\"$deploy\\" ]; then kubectl rollout status $deploy -n " + target_namespace + " --timeout=15m || true; fi; done && " + "for sts in $(kubectl get statefulsets -n " + target_namespace + " -o name 2>/dev/null || echo ''); do " + "if [ -n \\"$sts\\" ]; then kubectl rollout status $sts -n " + target_namespace + " --timeout=15m || true; fi; done && " + "echo 'Workload readiness check complete'"
+    
+    # Always create wait job to ensure sequential deployment
+    job_yaml = {
             "apiVersion": "batch/v1",
             "kind": "Job",
             "metadata": {
@@ -1018,10 +1020,13 @@ func (r *AppBundleReconciler) buildWaitJobMutator(appBundle *appv1alpha1.AppBund
                     }
                 }
             }
-        }
-        resource_list["items"].append(job_yaml)
+    }
+    resource_list["items"].append(job_yaml)
     
     return resource_list
+
+# Call the transform function
+transform(resource_list)
 `, namespace, group.Name, component.Name, syncWave, appBundle.Name, group.Name, component.Name)
 
 	return map[string]interface{}{
