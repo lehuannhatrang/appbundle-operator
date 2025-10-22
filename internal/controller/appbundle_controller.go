@@ -622,7 +622,8 @@ func (r *AppBundleReconciler) reconcileComponentWithPorch(ctx context.Context, a
 		},
 		// Mutator 3: Inject wait Job using Starlark
 		// This Job waits for all workload resources to be ready before proceeding
-		r.buildWaitJobMutator(appBundle, group, component, packageVariantName, waitSyncWaveStr),
+		// Only inject RBAC resources in the first Porch component (baseSyncWave == 0)
+		r.buildWaitJobMutator(appBundle, group, component, packageVariantName, waitSyncWaveStr, baseSyncWave == 0),
 	}
 
 	// Set PackageVariant spec with pipeline mutators
@@ -939,7 +940,8 @@ func isInfrastructureResource(kind string) bool {
 
 // buildWaitJobMutator creates a Starlark mutator that injects a wait Job
 // The wait Job uses Argo CD hooks to pause deployment until resources are ready
-func (r *AppBundleReconciler) buildWaitJobMutator(appBundle *appv1alpha1.AppBundle, group appv1alpha1.Group, component appv1alpha1.Component, packageName, syncWave string) map[string]interface{} {
+// includeRBAC determines whether to inject ServiceAccount, ClusterRole, and ClusterRoleBinding (only needed once)
+func (r *AppBundleReconciler) buildWaitJobMutator(appBundle *appv1alpha1.AppBundle, group appv1alpha1.Group, component appv1alpha1.Component, packageName, syncWave string, includeRBAC bool) map[string]interface{} {
 	// Determine namespace for the wait job
 	namespace := appBundle.Namespace
 	if namespace == "" {
@@ -955,48 +957,12 @@ func (r *AppBundleReconciler) buildWaitJobMutator(appBundle *appv1alpha1.AppBund
 	jobSyncWave, _ := strconv.Atoi(syncWave)
 	rbacSyncWave := jobSyncWave - 1 // One wave before the Job
 
-	// Build the Starlark script that injects the wait Job
-	// Note: KPT Starlark doesn't need imports - resource_list is passed directly
-	starlarkScript := fmt.Sprintf(`def transform(resource_list):
-    # Determine the target namespace from resources in the package
-    target_namespace = None
-    specific_wait_commands = []
-    
-    # Scan all resources in the package to determine namespace and specific resources
-    for resource in resource_list["items"]:
-        kind = resource.get("kind", "")
-        metadata = resource.get("metadata", {})
-        name = metadata.get("name", "")
-        ns = metadata.get("namespace", "")
-        
-        # Store the target namespace from the first namespaced resource
-        if ns and not target_namespace:
-            target_namespace = ns
-        
-        # Collect specific wait commands for known workload resources
-        # Note: Starlark doesn't support f-strings, use string concatenation
-        if kind == "Deployment" and name and ns:
-            specific_wait_commands.append("kubectl rollout status deployment/" + name + " -n " + ns + " --timeout=15m")
-        elif kind == "StatefulSet" and name and ns:
-            specific_wait_commands.append("kubectl rollout status statefulset/" + name + " -n " + ns + " --timeout=15m")
-        elif kind == "DaemonSet" and name and ns:
-            specific_wait_commands.append("kubectl rollout status daemonset/" + name + " -n " + ns + " --timeout=15m")
-    
-    # If no specific namespace found, use default
-    if not target_namespace:
-        target_namespace = "%s"
-    
-    # Build wait script - always create a wait job
-    # If we found specific resources, wait for them. Otherwise, use a simple delay
-    if specific_wait_commands:
-        wait_script = " && ".join(specific_wait_commands)
-    else:
-        # Generic wait: just add a delay to ensure resources have time to deploy
-        # This is a fallback when we can't detect specific resources in the package
-        wait_script = "echo 'Waiting for resources to be created in namespace " + target_namespace + "...' && sleep 10 && echo 'Proceeding to next group'"
-    
-    # Always create wait job to ensure sequential deployment
-    # First, create ServiceAccount
+	// Build RBAC resources code (conditionally included)
+	rbacComment := "false"
+	rbacCode := "# RBAC resources not included (already created in first package)"
+	if includeRBAC {
+		rbacComment = "true"
+		rbacCode = fmt.Sprintf(`# Create ServiceAccount
     sa_yaml = {
         "apiVersion": "v1",
         "kind": "ServiceAccount",
@@ -1076,8 +1042,56 @@ func (r *AppBundleReconciler) buildWaitJobMutator(appBundle *appv1alpha1.AppBund
         ]
     }
     resource_list["items"].append(clusterrolebinding_yaml)
+    `, strconv.Itoa(rbacSyncWave), appBundle.Name,
+			strconv.Itoa(rbacSyncWave), appBundle.Name,
+			strconv.Itoa(rbacSyncWave), appBundle.Name)
+	}
+
+	// Build the Starlark script that injects the wait Job
+	// Note: KPT Starlark doesn't need imports - resource_list is passed directly
+	starlarkScript := fmt.Sprintf(`def transform(resource_list):
+    # Determine the target namespace from resources in the package
+    target_namespace = None
+    specific_wait_commands = []
     
-    # Finally, create the wait Job
+    # Scan all resources in the package to determine namespace and specific resources
+    for resource in resource_list["items"]:
+        kind = resource.get("kind", "")
+        metadata = resource.get("metadata", {})
+        name = metadata.get("name", "")
+        ns = metadata.get("namespace", "")
+        
+        # Store the target namespace from the first namespaced resource
+        if ns and not target_namespace:
+            target_namespace = ns
+        
+        # Collect specific wait commands for known workload resources
+        # Note: Starlark doesn't support f-strings, use string concatenation
+        if kind == "Deployment" and name and ns:
+            specific_wait_commands.append("kubectl rollout status deployment/" + name + " -n " + ns + " --timeout=15m")
+        elif kind == "StatefulSet" and name and ns:
+            specific_wait_commands.append("kubectl rollout status statefulset/" + name + " -n " + ns + " --timeout=15m")
+        elif kind == "DaemonSet" and name and ns:
+            specific_wait_commands.append("kubectl rollout status daemonset/" + name + " -n " + ns + " --timeout=15m")
+    
+    # If no specific namespace found, use default
+    if not target_namespace:
+        target_namespace = "%s"
+    
+    # Build wait script - always create a wait job
+    # If we found specific resources, wait for them. Otherwise, use a simple delay
+    if specific_wait_commands:
+        wait_script = " && ".join(specific_wait_commands)
+    else:
+        # Generic wait: just add a delay to ensure resources have time to deploy
+        # This is a fallback when we can't detect specific resources in the package
+        wait_script = "echo 'Waiting for resources to be created in namespace " + target_namespace + "...' && sleep 10 && echo 'Proceeding to next group'"
+    
+    # Always create wait job to ensure sequential deployment
+    # RBAC resources (only added in first package): %s
+%s
+    
+    # Create the wait Job
     job_yaml = {
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -1118,10 +1132,7 @@ func (r *AppBundleReconciler) buildWaitJobMutator(appBundle *appv1alpha1.AppBund
 
 # Call the transform function
 transform(ctx.resource_list)
-`, namespace,
-		strconv.Itoa(rbacSyncWave), appBundle.Name, // ServiceAccount sync-wave and labels (RBAC wave)
-		strconv.Itoa(rbacSyncWave), appBundle.Name, // ClusterRole sync-wave and labels (RBAC wave)
-		strconv.Itoa(rbacSyncWave), appBundle.Name, // ClusterRoleBinding sync-wave and labels (RBAC wave)
+`, namespace, rbacComment, rbacCode,
 		group.Name, component.Name, randomSuffix, syncWave, appBundle.Name, group.Name, component.Name) // Job with random suffix (Job wave)
 
 	return map[string]interface{}{
