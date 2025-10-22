@@ -1027,7 +1027,7 @@ func (r *AppBundleReconciler) buildWaitJobMutator(appBundle *appv1alpha1.AppBund
     return resource_list
 
 # Call the transform function
-transform(resource_list)
+transform(ctx.resource_list)
 `, namespace, group.Name, component.Name, syncWave, appBundle.Name, group.Name, component.Name)
 
 	return map[string]interface{}{
