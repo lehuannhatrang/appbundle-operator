@@ -946,6 +946,9 @@ func (r *AppBundleReconciler) buildWaitJobMutator(appBundle *appv1alpha1.AppBund
 		namespace = "default"
 	}
 
+	// Generate a random suffix for the job name to avoid conflicts
+	randomSuffix := fmt.Sprintf("%d", time.Now().Unix()%100000)
+
 	// Build the Starlark script that injects the wait Job
 	// Note: KPT Starlark doesn't need imports - resource_list is passed directly
 	starlarkScript := fmt.Sprintf(`def transform(resource_list):
@@ -1073,7 +1076,7 @@ func (r *AppBundleReconciler) buildWaitJobMutator(appBundle *appv1alpha1.AppBund
         "apiVersion": "batch/v1",
         "kind": "Job",
         "metadata": {
-            "name": "wait-%s-%s",
+            "name": "wait-%s-%s-%s",
             "namespace": target_namespace,
             "annotations": {
                 "argocd.argoproj.io/hook": "Sync",
@@ -1108,12 +1111,12 @@ func (r *AppBundleReconciler) buildWaitJobMutator(appBundle *appv1alpha1.AppBund
     return resource_list
 
 # Call the transform function
-transform(ctx.resource_list)
+transform(resource_list)
 `, namespace,
 		syncWave, appBundle.Name, // ServiceAccount sync-wave and labels
 		syncWave, appBundle.Name, // ClusterRole sync-wave and labels
 		syncWave, appBundle.Name, // ClusterRoleBinding sync-wave and labels
-		group.Name, component.Name, syncWave, appBundle.Name, group.Name, component.Name) // Job
+		group.Name, component.Name, randomSuffix, syncWave, appBundle.Name, group.Name, component.Name) // Job with random suffix
 
 	return map[string]interface{}{
 		"image": "gcr.io/kpt-fn/starlark:v0.4.3",
