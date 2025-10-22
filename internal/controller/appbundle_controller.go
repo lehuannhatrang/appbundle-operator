@@ -987,48 +987,133 @@ func (r *AppBundleReconciler) buildWaitJobMutator(appBundle *appv1alpha1.AppBund
         wait_script = "echo 'Waiting for resources to be created in namespace " + target_namespace + "...' && sleep 10 && echo 'Proceeding to next group'"
     
     # Always create wait job to ensure sequential deployment
-    job_yaml = {
-            "apiVersion": "batch/v1",
-            "kind": "Job",
-            "metadata": {
-                "name": "wait-%s-%s",
-                "namespace": "default",
-                "annotations": {
-                    "argocd.argoproj.io/hook": "Sync",
-                    "argocd.argoproj.io/hook-delete-policy": "HookSucceeded",
-                    "argocd.argoproj.io/sync-wave": "%s"
-                },
-                "labels": {
-                    "app.example.com/appbundle": "%s",
-                    "app.example.com/group": "%s",
-                    "app.example.com/component": "%s",
-                    "app.example.com/wait-job": "true"
-                }
+    # First, create ServiceAccount
+    sa_yaml = {
+        "apiVersion": "v1",
+        "kind": "ServiceAccount",
+        "metadata": {
+            "name": "appbundle-wait-reader",
+            "namespace": target_namespace,
+            "annotations": {
+                "argocd.argoproj.io/sync-wave": "%s"
             },
-            "spec": {
-                "ttlSecondsAfterFinished": 300,
-                "backoffLimit": 3,
-                "template": {
-                    "spec": {
-                        "restartPolicy": "Never",
-                        "serviceAccountName": "appbundle-wait-reader",
-                        "containers": [{
-                            "name": "wait",
-                            "image": "bitnami/kubectl:latest",
-                            "command": ["sh", "-c"],
-                            "args": [wait_script]
-                        }]
-                    }
+            "labels": {
+                "app.example.com/appbundle": "%s",
+                "app.example.com/wait-job": "true"
+            }
+        }
+    }
+    resource_list["items"].append(sa_yaml)
+    
+    # Create ClusterRole for reading resource status
+    clusterrole_yaml = {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "ClusterRole",
+        "metadata": {
+            "name": "appbundle-wait-reader-" + target_namespace,
+            "annotations": {
+                "argocd.argoproj.io/sync-wave": "%s"
+            },
+            "labels": {
+                "app.example.com/appbundle": "%s",
+                "app.example.com/wait-job": "true"
+            }
+        },
+        "rules": [
+            {
+                "apiGroups": ["apps"],
+                "resources": ["deployments", "deployments/status", "statefulsets", "statefulsets/status", "daemonsets", "daemonsets/status"],
+                "verbs": ["get", "list", "watch"]
+            },
+            {
+                "apiGroups": ["batch"],
+                "resources": ["jobs", "jobs/status"],
+                "verbs": ["get", "list", "watch"]
+            },
+            {
+                "apiGroups": [""],
+                "resources": ["pods", "pods/status", "services"],
+                "verbs": ["get", "list", "watch"]
+            }
+        ]
+    }
+    resource_list["items"].append(clusterrole_yaml)
+    
+    # Create ClusterRoleBinding
+    clusterrolebinding_yaml = {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "ClusterRoleBinding",
+        "metadata": {
+            "name": "appbundle-wait-reader-" + target_namespace,
+            "annotations": {
+                "argocd.argoproj.io/sync-wave": "%s"
+            },
+            "labels": {
+                "app.example.com/appbundle": "%s",
+                "app.example.com/wait-job": "true"
+            }
+        },
+        "roleRef": {
+            "apiGroup": "rbac.authorization.k8s.io",
+            "kind": "ClusterRole",
+            "name": "appbundle-wait-reader-" + target_namespace
+        },
+        "subjects": [
+            {
+                "kind": "ServiceAccount",
+                "name": "appbundle-wait-reader",
+                "namespace": target_namespace
+            }
+        ]
+    }
+    resource_list["items"].append(clusterrolebinding_yaml)
+    
+    # Finally, create the wait Job
+    job_yaml = {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "name": "wait-%s-%s",
+            "namespace": target_namespace,
+            "annotations": {
+                "argocd.argoproj.io/hook": "Sync",
+                "argocd.argoproj.io/sync-wave": "%s"
+            },
+            "labels": {
+                "app.example.com/appbundle": "%s",
+                "app.example.com/group": "%s",
+                "app.example.com/component": "%s",
+                "app.example.com/wait-job": "true"
+            }
+        },
+        "spec": {
+            "ttlSecondsAfterFinished": 300,
+            "backoffLimit": 3,
+            "template": {
+                "spec": {
+                    "restartPolicy": "Never",
+                    "serviceAccountName": "appbundle-wait-reader",
+                    "containers": [{
+                        "name": "wait",
+                        "image": "bitnami/kubectl:latest",
+                        "command": ["sh", "-c"],
+                        "args": [wait_script]
+                    }]
                 }
             }
+        }
     }
     resource_list["items"].append(job_yaml)
     
     return resource_list
 
 # Call the transform function
-transform(ctx.resource_list)
-`, namespace, group.Name, component.Name, syncWave, appBundle.Name, group.Name, component.Name)
+transform(resource_list)
+`, namespace,
+		syncWave, appBundle.Name, // ServiceAccount sync-wave and labels
+		syncWave, appBundle.Name, // ClusterRole sync-wave and labels
+		syncWave, appBundle.Name, // ClusterRoleBinding sync-wave and labels
+		group.Name, component.Name, syncWave, appBundle.Name, group.Name, component.Name) // Job
 
 	return map[string]interface{}{
 		"image": "gcr.io/kpt-fn/starlark:v0.4.3",
