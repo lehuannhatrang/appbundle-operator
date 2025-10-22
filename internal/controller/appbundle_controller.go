@@ -1117,7 +1117,7 @@ func (r *AppBundleReconciler) buildWaitJobMutator(appBundle *appv1alpha1.AppBund
     return resource_list
 
 # Call the transform function
-transform(resource_list)
+transform(ctx.resource_list)
 `, namespace,
 		strconv.Itoa(rbacSyncWave), appBundle.Name, // ServiceAccount sync-wave and labels (RBAC wave)
 		strconv.Itoa(rbacSyncWave), appBundle.Name, // ClusterRole sync-wave and labels (RBAC wave)
