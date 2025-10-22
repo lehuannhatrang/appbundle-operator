@@ -949,6 +949,12 @@ func (r *AppBundleReconciler) buildWaitJobMutator(appBundle *appv1alpha1.AppBund
 	// Generate a random suffix for the job name to avoid conflicts
 	randomSuffix := fmt.Sprintf("%d", time.Now().Unix()%100000)
 
+	// Calculate sync waves for RBAC resources (must be before the Job)
+	// RBAC resources need to exist before the Job that uses them
+	// syncWave parameter is the Job's sync wave, RBAC should be 1 less
+	jobSyncWave, _ := strconv.Atoi(syncWave)
+	rbacSyncWave := jobSyncWave - 1 // One wave before the Job
+
 	// Build the Starlark script that injects the wait Job
 	// Note: KPT Starlark doesn't need imports - resource_list is passed directly
 	starlarkScript := fmt.Sprintf(`def transform(resource_list):
@@ -1111,12 +1117,12 @@ func (r *AppBundleReconciler) buildWaitJobMutator(appBundle *appv1alpha1.AppBund
     return resource_list
 
 # Call the transform function
-transform(ctx.resource_list)
+transform(resource_list)
 `, namespace,
-		syncWave, appBundle.Name, // ServiceAccount sync-wave and labels
-		syncWave, appBundle.Name, // ClusterRole sync-wave and labels
-		syncWave, appBundle.Name, // ClusterRoleBinding sync-wave and labels
-		group.Name, component.Name, randomSuffix, syncWave, appBundle.Name, group.Name, component.Name) // Job with random suffix
+		strconv.Itoa(rbacSyncWave), appBundle.Name, // ServiceAccount sync-wave and labels (RBAC wave)
+		strconv.Itoa(rbacSyncWave), appBundle.Name, // ClusterRole sync-wave and labels (RBAC wave)
+		strconv.Itoa(rbacSyncWave), appBundle.Name, // ClusterRoleBinding sync-wave and labels (RBAC wave)
+		group.Name, component.Name, randomSuffix, syncWave, appBundle.Name, group.Name, component.Name) // Job with random suffix (Job wave)
 
 	return map[string]interface{}{
 		"image": "gcr.io/kpt-fn/starlark:v0.4.3",
