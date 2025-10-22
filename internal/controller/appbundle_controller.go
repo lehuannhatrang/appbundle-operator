@@ -978,12 +978,13 @@ func (r *AppBundleReconciler) buildWaitJobMutator(appBundle *appv1alpha1.AppBund
         target_namespace = "%s"
     
     # Build wait script - always create a wait job
-    # If we found specific resources, wait for them. Otherwise, wait for any deployments/statefulsets in namespace
+    # If we found specific resources, wait for them. Otherwise, use a simple delay
     if specific_wait_commands:
         wait_script = " && ".join(specific_wait_commands)
     else:
-        # Generic wait: check for any deployments or statefulsets in the namespace
-        wait_script = "echo 'Waiting for workloads in namespace " + target_namespace + "...' && sleep 5 && " + "for deploy in $(kubectl get deployments -n " + target_namespace + " -o name 2>/dev/null || echo ''); do " + "if [ -n \\"$deploy\\" ]; then kubectl rollout status $deploy -n " + target_namespace + " --timeout=15m || true; fi; done && " + "for sts in $(kubectl get statefulsets -n " + target_namespace + " -o name 2>/dev/null || echo ''); do " + "if [ -n \\"$sts\\" ]; then kubectl rollout status $sts -n " + target_namespace + " --timeout=15m || true; fi; done && " + "echo 'Workload readiness check complete'"
+        # Generic wait: just add a delay to ensure resources have time to deploy
+        # This is a fallback when we can't detect specific resources in the package
+        wait_script = "echo 'Waiting for resources to be created in namespace " + target_namespace + "...' && sleep 10 && echo 'Proceeding to next group'"
     
     # Always create wait job to ensure sequential deployment
     job_yaml = {
