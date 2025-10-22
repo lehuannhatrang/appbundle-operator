@@ -992,7 +992,7 @@ func (r *AppBundleReconciler) buildWaitJobMutator(appBundle *appv1alpha1.AppBund
             "kind": "Job",
             "metadata": {
                 "name": "wait-%s-%s",
-                "namespace": default,
+                "namespace": "default",
                 "annotations": {
                     "argocd.argoproj.io/hook": "Sync",
                     "argocd.argoproj.io/hook-delete-policy": "HookSucceeded",
